@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://proof-script.local/schema/proof-tree-0.2.0.json",
+  "title": "Proof-Script Proof Tree JSON",
+  "description": "Version 0.2.0 proof-tree envelope.",
+  "type": "object",
+  "required": ["schemaVersion", "code", "proof"],
+  "properties": {
+    "schemaVersion": { "const": "0.2.0" },
+    "code": { "type": "string" },
+    "proof": { "type": "array", "items": { "$ref": "#/$defs/record" } }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "required": ["title", "label", "extra"],
+      "properties": {
+        "title": { "type": "string" },
+        "label": {
+          "oneOf": [
+            { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$" },
+            { "type": "null" }
+          ]
+        },
+        "extra": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [{ "type": "string" }, { "type": "string" }],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "expression": {
+      "description": "Extensible serialized Lean expression or tactic-specific JSON value.",
+      "type": ["object", "array", "string", "number", "boolean", "null"]
+    },
+    "goalRecord": {
+      "type": "object",
+      "required": ["_goal_"],
+      "properties": {
+        "_goal_": { "$ref": "#/$defs/expression" }
+      },
+      "additionalProperties": true
+    },
+    "stepRecord": {
+      "type": "object",
+      "required": ["_step_"],
+      "properties": {
+        "_step_": { "type": "string", "minLength": 1 },
+        "metadata": { "$ref": "#/$defs/metadata" },
+        "language": { "type": "string" },
+        "source": { "type": "string" },
+        "svg": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "strategyRecord": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "info": { "$ref": "#/$defs/expression" }
+      },
+      "additionalProperties": true
+    },
+    "record": {
+      "oneOf": [
+        { "$ref": "#/$defs/goalRecord" },
+        { "$ref": "#/$defs/stepRecord" },
+        { "$ref": "#/$defs/strategyRecord" }
+      ]
+    }
+  }
+}

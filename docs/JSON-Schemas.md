@@ -175,7 +175,7 @@ the proof tree.
 }
 ```
 
-`#LaTeX` accepts arbitrary LaTeX source, compiles it to SVG, and emits the `latex` tag above.
+`#latex` accepts arbitrary LaTeX source, compiles it to SVG, and emits the `latex` tag above.
 
 `#figure` accepts a relative image resource path:
 
@@ -335,11 +335,12 @@ metadata; absent ranges are omitted rather than inferred.
 
 ### 3.4 LaTeX component steps
 
-The `tikz`, `figure`, and `table` proof tactics produce step records containing:
+The `latex` proof tactic accepts the same metadata and arbitrary LaTeX source as the page-level
+`#latex` component. It produces a step record containing:
 
 ```json
 {
-  "_step_": "figure",
+  "_step_": "latex",
   "metadata": {
     "title": "Inline figure",
     "label": "inline-figure",

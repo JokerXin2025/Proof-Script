@@ -172,7 +172,7 @@ null。`proof` 是独立证明树 JSON 文件的路径。`sorryAx` 表示该声�
 }
 ```
 
-`#LaTeX` 接受任意 LaTeX 源码，将其编译为 SVG，并导出上述 `latex` 标签。
+`#latex` 接受任意 LaTeX 源码，将其编译为 SVG，并导出上述 `latex` 标签。
 
 `#figure` 接受一个相对图片资源路径：
 
@@ -328,11 +328,12 @@ application 节点保留二叉 `fn`、`arg` 字段，并额外提供：
 
 ### 3.4 LaTeX 组件步骤
 
-`tikz`、`figure` 和 `table` 证明策略生成的步骤记录包含：
+证明内的 `latex` 策略与页面级 `#latex` 组件一样，接收 metadata 和任意 LaTeX 源码，
+生成的步骤记录包含：
 
 ```json
 {
-  "_step_": "figure",
+  "_step_": "latex",
   "metadata": {
     "title": "Inline figure",
     "label": "inline-figure",

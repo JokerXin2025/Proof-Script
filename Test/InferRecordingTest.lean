@@ -1,5 +1,10 @@
 import ProofScript
 
+theorem test_infer_term (P Q R : Prop) (hPQ : P → Q) (hQR : Q → R) (hp : P) : R :=
+  infer
+    P => Q := hPQ hp
+    _ => R := hQR ?_
+
 -- 测试1：在 := script 模式下，infer 能正确录制
 theorem test_infer_script (P Q R : Prop) (hPQ : P → Q) (hQR : Q → R) (hp : P) : R := script
   infer

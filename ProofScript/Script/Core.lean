@@ -1,4 +1,4 @@
-import ProofScript.JsonBox
+import ProofScript.Script.JsonBox
 
 open Lean (Json)
 open Lean.Name (mkSimple)

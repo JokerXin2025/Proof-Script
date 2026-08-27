@@ -74,7 +74,7 @@ Proof-Script 中引入了由 `:= script` 引导的脚本模式来代替策略模
 
 1. 步骤: `intro_h` , `apply_thm` 等作为形式化证明中的逻辑单元, 它们相比一般的 Lean 策略具有更强的语义性.
 2. 概略: `split_and` , `by_contra` , `induction` 等在宏观上确定了证明的结构, 并且具有统一的语法形式.
-3. 元数据: `remark` , `figure` , `tikz` 等可在证明脚本嵌入解释性文本/图表等元数据.
+3. 元数据: `remark`、`latex` 等可在证明脚本嵌入解释性文本或图表等元数据.
 
 以上三类元素可以统称为脚本策略. 这种约束使证明脚本更适合稳定地映射为自然语言或交互式展示, 同时兼备 Lean 形式化验证能力, 下面的代码提供了一个完整示例.
 
@@ -106,7 +106,7 @@ theorem implicationChain
 | :- | :- | :- |
 | `intro_h ⟨h⟩` | 引入命题假设 | `intro` | 只能对证明项使用 |
 | `intro_var ⟨val⟩` | 引入数据变量 | `intro` | 只能对变量使用 |
-| `provide ⟨h⟩` | 提供证明项闭合目标 | `exact` | 只能在 `witness` 的 `prep` 分支中使用 |
+| `provide ⟨h⟩` | 提供证明项闭合目标 | `exact` | 只能在 `witness` 的 `data` 分支中使用 |
 | `apply_h ⟨h⟩` | 应用局部假设, 留下前提子目标 | `apply` | 只能对上下文中的变量使用 |
 | `apply_thm ⟨thm⟩` | 应用定理, 留下前提子目标 | `apply` | 只能对作为常量的定理使用 |
 | `quot_induction q with a` | 商类型归纳 | `induction` |
@@ -120,13 +120,13 @@ theorem implicationChain
 
 `witness` 作用于形如 `∃ x, P x` 的存在性命题, 并将其拆分为两个分支:
 
-- `prep` : 构造符合条件的对象
+- `data` : 构造符合条件的对象
 - `proof` : 证明该对象满足 `P`
 
 ```lean
 theorem demo_witness : ∃ n : Nat, n = 0 := script
   witness
-  | prep => provide 0
+  | data => provide 0
   | proof => trivial
 ```
 
@@ -207,15 +207,15 @@ theorem demo_complete_induction (n : Nat) : n + 0 = n := script
   | succ k ih => rfl
 ```
 
-##### 分类讨论 `by_cases`
+##### 分类讨论 `cases_on`
 
-`by_cases h : p` 按命题 `p` 的真假分类讨论, 产生 `caseI` (`h : p`) 与 `caseII` (`h : ¬p`) 两个分支:
+`cases_on p` 对命题 `p` 按真假分类讨论, 产生 `true h` (`h : p`) 与 `false h` (`h : ¬p`) 两个分支:
 
 ```lean
-theorem demo_by_cases (n : Nat) : n = 0 ∨ n ≠ 0 := script
-  by_cases h : n = 0
-  | caseI => provide (Or.inl h)
-  | caseII => provide (Or.inr h)
+theorem demo_cases_on (n : Nat) : n = 0 ∨ n ≠ 0 := script
+  cases_on (n = 0)
+  | true h => provide (Or.inl h)
+  | false h => provide (Or.inr h)
 ```
 
 #### 元数据
@@ -242,12 +242,13 @@ theorem draft (P : Prop) : P := cause "This result has not been formalized yet."
 
 ##### LaTeX (SVG)
 
-证明内部提供 `tikz`、`figure`、`table` 三种元数据策略. 它们接收 LaTeX 源码, 在录制时
-调用本地 LaTeX 工具链生成 SVG, 并把 metadata、源码和 SVG 一同写入证明树. 例如:
+证明内部提供统一的 `latex` 元数据策略. 它与页面组件 `#latex` 一样接收 metadata 和任意
+LaTeX 源码，在录制时调用本地 LaTeX 工具链生成 SVG，并把 metadata、源码和 SVG 一同写入
+证明树。例如:
 
 ```lean
 #theorem proofWithDiagram (P : Prop) (h : P) : P := script
-  tikz (title := "推导图", label := "proof-diagram") r#"
+  latex (title := "推导图", label := "proof-diagram") r#"
     \begin{tikzpicture}
       \draw[->] (0,0) -- (1,0);
     \end{tikzpicture}
@@ -255,8 +256,8 @@ theorem draft (P : Prop) : P := cause "This result has not been formalized yet."
   provide h
 ```
 
-为了保证预编译器顺利工作, 请确保 TeXLive 已本地安装. 这里是证明内部策略；页面级任意
-LaTeX 使用后文的 `#LaTeX` 命令.
+为了保证预编译器顺利工作，请确保 TeXLive 已本地安装。这里是证明内部策略；页面级任意
+LaTeX 使用后文的 `#latex` 命令。
 
 #### 连续计算 `calc`
 
@@ -297,15 +298,19 @@ theorem divisibility_chain {a b c d e : ℕ}
 
 ### 自定义脚本策略
 
-使用 `script_macro` / `script_elab` 可以创建一个脚本策略, 它们的用法和 `macro` / `elab` 一致, 例如:
+使用 `script_macro` / `script_elab` 可以创建一个脚本策略. 两者以及 `script_recorder` 都只支持
+显式的 `: tactic` 类别；需要提供项版本时，应使用普通 `macro` 将它包装为 `script` 证明。例如:
 
 ```lean
-script_macro (record := false)
+script_macro (recorder := exclusive)
 "finish" proof:term : tactic => `(tactic| exact $proof:term)
 
 script_elab (intro := [h])
 "intro_named" h:ident : tactic => do
   Lean.Elab.Tactic.evalTactic (← `(tactic| intro $h:ident))
+
+macro "finish" proof:term : term => `(script
+  finish $proof:term)
 ```
 
 在创建脚本策略时, 你可能需要提供一些额外信息以使得 Proof-Script 能够正确地处理它们, 这些参数包括:
@@ -314,15 +319,15 @@ script_elab (intro := [h])
 | - | - | - | - |
 | `intro` | 语法参数列表 | 表示由该脚本策略引入的参数, 这些参数只在执行后序列化 | `[]` |
 | `clear` | 语法参数列表 | 表示由该脚本策略消除的参数, 这些参数只在执行前序列化 | `[]` |
-| `strategy` | `true` , `false` | 用于标注该脚本策略是否为概略 | `false` |
-| `record` | `true` , `false` | 用于指定是否自动生成记录器 | `true` |
+| `kind` | `step`, `strategy` | 用于标注该脚本策略是步骤还是概略 | `step` |
+| `recorder` | `auto`, `exclusive` | 自动生成记录器，或仅使用手写记录器 | `auto` |
 
 Proof-Script 默认将导出该脚本策略全体参数在执行前后的信息, 而对于
 
 - 除了 `term` , `ident` , `str` , `num` 以及 `+` 重复形式之外的复杂语法参数
-- 一些需要导出特定元数据（例如 `tikz` 会自动编译 LaTeX 为 SVG 编码）
+- 一些需要导出特定元数据（例如 `latex` 会自动编译 LaTeX 为 SVG 编码）
 
-请设置 `record := false` 并使用 `script_recorder` 来手动创建记录器. `script_recorder` 接收
+请设置 `recorder := exclusive` 并使用 `script_recorder` 来手动创建记录器. `script_recorder` 接收
 不带 `script_` 前缀的原策略名, 自动定义 `_script_` 录制入口并完成 kind 注册:
 
 ```lean
@@ -484,11 +489,11 @@ set_option proofScript.references.enabled false in
 
 ### 任意 LaTeX
 
-`#LaTeX` 接收任意 LaTeX 源码并在编译期生成 SVG. `title` 必填, `label` 可选, 其它字段会
+`#latex` 接收任意 LaTeX 源码并在编译期生成 SVG. `title` 必填, `label` 可选, 其它字段会
 保存在 metadata 的 `extra` 中:
 
 ```lean
-#LaTeX (
+#latex (
   title := "交换图",
   label := "commutative-diagram"
 ) r#"
@@ -528,7 +533,7 @@ set_option proofScript.references.enabled false in
 
 ### 可选 LaTeX 环境
 
-如果需要使用页面组件 `#LaTeX` , 系统 `PATH` 中还必须存在:
+如果需要使用页面组件 `#latex` , 系统 `PATH` 中还必须存在:
 
 ```bash
 latex --version

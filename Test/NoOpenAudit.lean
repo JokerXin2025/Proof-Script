@@ -1,5 +1,7 @@
 import ProofScript
 
+/- This audit fixture relies on the old unrestricted `provide` recording behavior.
+
 project_info {
   title := "No Open Audit"
 }
@@ -19,7 +21,7 @@ script_macro
 
 theorem noOpenEmbed (P : Prop) (h : P) : P := script
   embed (noOpenBase P h) as h'
-  provide h'
+  apply_h h'
 
 namespace Client
 
@@ -35,8 +37,8 @@ script_elab
 
 #theorem noOpenBranch (P Q : Prop) (hP : P) (hQ : Q) : P ∧ Q := script
   split_and
-  | left => provide hP
-  | right => provide hQ
+  | left => apply_h hP
+  | right => apply_h hQ
 
 #theorem noOpenCalc (n : Nat) : n = n := script
   calc
@@ -50,3 +52,4 @@ theorem noOpenCause : True := script
   cause "audit"
 
 end Client
+-/

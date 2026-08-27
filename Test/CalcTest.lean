@@ -19,4 +19,4 @@ theorem test_calc_no_export (a b c : Nat) (hab : a = b) (hbc : b = c) : a = c :=
   calc
     a = b := hab
     _ = c := ?_
-  provide hbc
+  apply_h hbc

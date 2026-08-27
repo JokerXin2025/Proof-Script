@@ -21,11 +21,8 @@ def pageOutputPath (moduleName : Name) : FilePath :=
 def proofOutputPath (moduleName declName : Name) : FilePath :=
   let moduleDir := modulePath moduleName
   let declPath := modulePath declName
-  let parent := declPath.parent.getD (FilePath.mk "")
   let declFile := s!"{declPath.fileName.getD "proof"}.json"
-  let base := outputRoot / "proofs" / moduleDir
-  if parent.toString.isEmpty then base / declFile
-  else base / parent / declFile
+  outputRoot / "proofs" / moduleDir / declFile
 
 def ensureParentDir (path : FilePath) : IO Unit := do
   if let some parent := path.parent then

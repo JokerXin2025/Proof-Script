@@ -4,5 +4,7 @@ import ProofScript.References.Metadata
 import ProofScript.References.State
 import ProofScript.References.Collect
 import ProofScript.References.Command
-import ProofScript.Extension.Command
-import ProofScript.Extension.Components.Latex
+import ProofScript.Extension.Page.Command
+import ProofScript.Extension.Component.ProofText
+import ProofScript.Extension.Component.Latex
+import ProofScript.Extension.Component.Figure

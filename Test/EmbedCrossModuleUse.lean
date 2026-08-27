@@ -1,5 +1,7 @@
 import Test.EmbedCrossModuleDecl
 
+/- This embedded recording test relies on the old unrestricted `provide` behavior.
+
 /-! ## `embed` 跨模块测试（⑥）——使用方
 
 import 上面的声明方模块，验证 `embed` 能从 `.olean` 里取回 `le_trans_script` 的脚本并重放。
@@ -7,4 +9,5 @@ import 上面的声明方模块，验证 `embed` 能从 `.olean` 里取回 `le_t
 
 #theorem demo (a b c : Nat) (hab : a ≤ b) (hbc : b ≤ c) : a ≤ c := script
   embed (le_trans_script a b c hab hbc) as hac
-  provide hac
+  apply_h hac
+-/

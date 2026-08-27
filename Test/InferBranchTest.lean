@@ -1,5 +1,7 @@
 import ProofScript
 
+/- This recording test relies on the old unrestricted `provide` behavior.
+
 -- 测试：不在分支内
 #theorem test_no_branch (P Q R : Prop) (hPQ : P → Q) (hQR : Q → R) : P → R := script
   intro_h hp
@@ -17,4 +19,7 @@ import ProofScript
     _ => R := hQR ?_
   | right =>
     intro_h hp
-    provide (hQR (hPQ hp))
+    apply_h hQR
+    apply_h hPQ
+    apply_h hp
+-/

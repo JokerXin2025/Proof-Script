@@ -1,27 +1,35 @@
-import ProofScript.Config
+import ProofScript.Script.Config
 import ProofScript.Script.Script
 import ProofScript.References.Collect
-import ProofScript.Extension.Components.Latex
+import ProofScript.Extension.Component.Core
+import ProofScript.Extension.Component.Latex
 
 open Lean
-open Meta (MetaM whnf isProp inferType AltVarNames
+open Meta (MetaM whnf isProp inferType isDefEq
            mkFreshExprMVar mkConstWithFreshMVarLevels
            withLetDecl withLocalDecl isDefEqGuarded)
 open Elab (liftMacroM)
 open Elab.Term (elabType elabTermEnsuringType)
-open Elab.Tactic (evalTactic evalTacticAt elabTerm getMainGoal getFVarId
-                       replaceMainGoal withMainContext)
+open Elab.Tactic (evalTactic elabTerm elabTermForApply getMainGoal getFVarId getGoals
+                        replaceMainGoal withMainContext)
 open Parser.Term (hole syntheticHole)
 open Parser.Tactic (tacticSeq)
+open ProofScript.Extension
 
 
 namespace ProofScript
+
+
+initialize witnessDataGoals : IO.Ref (List MVarId) ← IO.mkRef []
 
 
 /-! ## Lean Native Tactics -/
 
 script_macro
 "change" equation:term : tactic => `(tactic| change $equation)
+
+script_macro
+"exfalso" : tactic => `(tactic| exfalso)
 
 script_macro
 "omega" : tactic => `(tactic| omega)
@@ -34,6 +42,28 @@ script_macro
 
 script_macro
 "trivial" : tactic => `(tactic| trivial)
+
+script_macro
+"simp_only" "[" lemmas:(colGt ident)+ "]" : tactic => `(tactic|
+  simp only [$[$lemmas:ident],*]
+)
+
+script_macro
+"rewrite" equation:ident : tactic => `(tactic| (
+  rewrite [$equation:ident]
+  try rfl
+))
+
+script_macro
+"rewrite" "←" equation:ident : tactic => `(tactic|(
+  rewrite [← $equation:ident]
+  try rfl
+))
+
+script_macro
+"unfold" definitions:(colGt ident)+ : tactic => `(tactic|
+  unfold $definitions*
+)
 
 
 /-! ## Script-Tactics -/
@@ -48,7 +78,7 @@ script_elab (intro := [h])
       throwError "to introduce a variable, please use `intro_var`"
     let bodyWhnf ← whnf body
     if bodyWhnf.isConstOf ``False then
-      throwError "to solve the goal of form `... → False`, please use `by_contra`"
+      throwError "to solve the goal of form `... → False`, please use `contra`"
     let (_, newMVarId) ← mvarId.intro h.getId
     replaceMainGoal [newMVarId]
   | _ =>
@@ -101,32 +131,71 @@ script_elab (intro := [h₁, h₂], clear := [h])
     else
       throwError "unpack_and 失败：变量 '{h.getId}' 的类型不是 ∧ (And)。"
 
-script_macro
-"provide" proof:term : tactic => `(tactic| exact $proof:term)
+script_elab (intro := [h₁, h₂], clear := [h])
+"unpack_iff" "⟨" h₁:ident "," h₂:ident "⟩" ":=" h:ident : tactic => do
+  let mvarId ← getMainGoal
+  withMainContext do
+    let fvarId ← getFVarId h
+    let hExpr ← whnf (← fvarId.getType)
+    unless hExpr.isAppOfArity ``Iff 2 do
+      throwError "unpack_iff 失败：变量 '{h.getId}' 的类型不是等价命题 (Iff)。"
+    let altNames := { varNames := [h₁.getId, h₂.getId] }
+    let #[subgoal] ← mvarId.cases fvarId #[altNames]
+    | throwError "unpack_iff 失败：解构等价命题产生了非预期的子目标数量"
+    replaceMainGoal [subgoal.mvarId]
 
-script_macro
-"apply_h" lemma:term : tactic => `(tactic| apply $lemma:term)
+script_elab (intro := [h₁, h₂], clear := [h])
+"obtain_exist" "⟨" h₁:ident "," h₂:ident "⟩" ":=" h:ident : tactic => do
+  let mvarId ← getMainGoal
+  withMainContext do
+    let fvarId ← getFVarId h
+    let hExpr ← whnf (← fvarId.getType)
+    if hExpr.isAppOfArity ``Exists 2 then
+      let altNames := { varNames := [h₁.getId, h₂.getId] }
+      let #[subgoal] ← mvarId.cases fvarId #[altNames]
+        | throwError "obtain_exist 失败：解构存在性产生了非预期的子目标数量"
+      replaceMainGoal [subgoal.mvarId]
+    else
+      throwError "obtain_exist 失败：变量 '{h.getId}' 的类型不是存在命题 (Exists)。"
 
-script_macro
-"apply_thm" thm:term : tactic => `(tactic| apply $thm:term)
+script_elab
+"ext_fun" arg:ident : tactic => do
+  let xName := arg.getId
+  let target ← withMainContext <| whnf (← GetGoal)
+  unless target.isAppOfArity ``Eq 3 do
+    throwError "`ext_fun` 只能用于函数等式目标"
+  let lhsType ← withMainContext <| whnf (← inferType (target.getArg! 1))
+  let rhsType ← withMainContext <| whnf (← inferType (target.getArg! 2))
+  match lhsType, rhsType with
+  | .forallE _ domain _ _, .forallE _ domain' _ _ =>
+    unless ← isDefEq domain domain' do
+      throwError "`ext_fun` 要求等式两侧具有相同的函数定义域"
+    evalTactic (← `(tactic| funext $(mkIdent xName)))
+  | _, _ => throwError "`ext_fun` 只能用于函数等式目标"
 
-script_macro
-"simp" "only" "[" lemmas:term "]" : tactic => `(tactic| simp only [$lemmas:term])
+script_elab
+"provide" proof:term : tactic => do
+  let goal ← getMainGoal
+  unless (← witnessDataGoals.get).contains goal do
+    throwError "`provide` can only be used in the `data` branch of `witness`"
+  evalTactic (← `(tactic| exact $proof:term))
+  witnessDataGoals.modify (·.filter (· != goal))
 
-script_macro
-"rewrite" equation:term : tactic => `(tactic| (
-  rewrite [$equation:term]
-  try rfl
-))
+script_elab (clear := [lemma])
+"apply_h" lemma:term : tactic => do
+  let lemmaExpr ← withMainContext do
+    instantiateMVars (← elabTermForApply lemma)
+  unless lemmaExpr.isFVar && (← withMainContext <| isProp (← inferType lemmaExpr)) do
+    throwErrorAt lemma "`apply_h` expects a local hypothesis that proves a proposition"
+  evalTactic (← `(tactic| apply $lemma:term))
 
-script_macro
-"rewrite" "←" equation:term : tactic => `(tactic|(
-  rewrite [← $equation:term]
-  try rfl
-))
-
-script_macro
-"unfold" definitions:(colGt ident)+ : tactic => `(tactic| unfold $definitions*)
+script_elab
+"apply_thm" thm:term : tactic => do
+  let thmExpr ← withMainContext do
+    instantiateMVars (← elabTermForApply thm)
+  unless thmExpr.isConst && (← withMainContext <| isProp (← inferType thmExpr)) do
+    throwErrorAt thm "`apply_thm` expects a theorem constant that proves a proposition"
+  evalTactic (← `(tactic| apply $thm:term))
 
 script_macro (intro := [a])
 "quot_induction" q:term "with" a:ident : tactic => `(tactic|
@@ -136,7 +205,21 @@ script_macro (intro := [a])
 
 /-! ## Script-Strategy -/
 
-script_elab (strategy := true)
+/-! ### 断言 -/
+
+script_elab (intro := [h], kind := strategy)
+"have" h:ident ":" type:term : tactic => do
+  let goal ← getMainGoal
+  let type ← withMainContext (elabTerm type none)
+  let proofMVar ← withMainContext (mkFreshExprMVar type)
+  proofMVar.mvarId!.setTag `proof
+  let restMVar ← goal.assert h.getId type proofMVar
+  let (_, restMVar') ← restMVar.intro1P
+  replaceMainGoal [restMVar', proofMVar.mvarId!]
+
+/-! ### 存在性构造 -/
+
+script_elab (kind := strategy)
 "witness" : tactic => do
   let mvarId ← getMainGoal
   let goalExpr ← whnf (← mvarId.getType)
@@ -145,14 +228,17 @@ script_elab (strategy := true)
     match mvarIds with
     | [m₁, m₂] =>
       m₁.setTag `proof
-      m₂.setTag `prep
+      m₂.setTag `data
+      witnessDataGoals.modify (m₂ :: ·)
       replaceMainGoal [m₁, m₂]
     | _ =>
       throwError "unexpected error occurred during executing `witness`"
   else
     throwError "`witness` can only be used with propositions beginning with `∃`"
 
-script_elab (strategy := true)
+/-! ### 目标分解 —— 合取 -/
+
+script_elab (kind := strategy)
 "split_and" : tactic => do
   let mvarId ← getMainGoal
   let goalExpr ← whnf (← mvarId.getType)
@@ -190,7 +276,9 @@ script_elab
     i := i + 1
   replaceMainGoal leaves
 
-script_elab (strategy := true)
+/-! ### 目标分解 —— 等价 -/
+
+script_elab (kind := strategy)
 "split_iff" : tactic => do
   let mvarId ← getMainGoal
   let goalExpr ← whnf (← mvarId.getType)
@@ -208,8 +296,75 @@ script_elab (strategy := true)
     | _ =>
       throwError "unexpected error occurred during executing `split_iff`"
 
-script_elab (intro := [h], strategy := true)
-"by_contra" h:ident : tactic => do
+/-! ### 基于命题的分类讨论 -/
+
+script_elab (clear := [h], kind := strategy)
+"cases_by" h:ident : tactic => do
+  let mvarId ← getMainGoal
+  withMainContext do
+    let fvarId ← getFVarId h
+    let hExpr ← whnf (← fvarId.getType)
+    if hExpr.isAppOfArity ``Or 2 then
+      let altNames := #[
+        { varNames := [Name.mkSimple "hp"] },
+        { varNames := [Name.mkSimple "hq"] }
+      ]
+      let subgoals ← mvarId.cases fvarId altNames
+      match subgoals with
+      | #[leftGoal, rightGoal] =>
+          leftGoal.mvarId.setTag `left
+          rightGoal.mvarId.setTag `right
+          replaceMainGoal [leftGoal.mvarId, rightGoal.mvarId]
+       | _ => throwError "cases_by 失败：解构析取产生了非预期的子目标数量"
+    else
+      throwError "cases_by 失败：变量 '{h.getId}' 的类型不是析取命题 (Or)。"
+
+script_elab (kind := strategy)
+"cases_by!" h:ident : tactic => do
+  let mvarId ← getMainGoal
+  withMainContext do
+    let hId ← getFVarId h
+    let hType ← whnf (← hId.getType)
+    unless hType.isAppOfArity ``Or 2 do
+      throwError "`cases_by!` 只能用于析取命题假设"
+    let leaves ← mvarId.casesRec fun declaration => do
+      pure ((declaration.fvarId == hId) ||
+        (← whnf declaration.type).isAppOfArity ``Or 2)
+    unless leaves.length >= 2 do
+      throwError "cases_by! 失败：解构析取产生了非预期的子目标数量"
+    let mut tagged : List MVarId := []
+    let mut i := 1
+    for leaf in leaves do
+      leaf.setTag (Name.mkSimple s!"goal{toRoman i}")
+      tagged := tagged ++ [leaf]
+      i := i + 1
+    replaceMainGoal tagged
+
+/-! ### 基于数据类型的分类讨论 -/
+
+script_elab (kind := strategy)
+"cases_on" value:term : tactic => do
+  let (_valueExpr, valueType) ← withMainContext do
+    let valueExpr ← elabTerm value none
+    pure (valueExpr, ← whnf (← inferType valueExpr))
+  if valueType == .sort .zero then
+    evalTactic (← `(tactic| open Classical in
+      by_cases h : $value:term))
+    let goals ← getGoals
+    match goals with
+    | [trueGoal, falseGoal] =>
+      trueGoal.setTag `true
+      falseGoal.setTag `false
+    | _ => throwError "cases_on 失败：命题分类产生了非预期的子目标数量"
+  else if ← isProp valueType then
+    throwError "`cases_on` 不能对命题证明项使用；请传入命题本身"
+  else
+    evalTactic (← `(tactic| cases $value:term))
+
+/-! ### 反证法 -/
+
+script_elab (intro := [h], kind := strategy)
+"contra" h:ident : tactic => do
   let mvarId ← getMainGoal
   let goalExpr ← whnf (← mvarId.getType)
   let isArrowToFalse := match goalExpr with
@@ -220,10 +375,19 @@ script_elab (intro := [h], strategy := true)
     newMVarId.setTag `proof
     replaceMainGoal [newMVarId]
   else
-    evalTactic (← `(tactic| original_by_contra $h))
+    evalTactic (← `(tactic| by_contra $h))
     let newMVarId ← getMainGoal
     newMVarId.setTag `proof
     replaceMainGoal [newMVarId]
+
+/-! ### 数学归纳法 -/
+
+script_macro (clear := [n], kind := strategy)
+"induction" n:ident : tactic => `(tactic|
+  induction $n:ident
+)
+
+/-! ### 强（完全）归纳法 -/
 
 private theorem strongInductionOn {motive : Nat → Prop}
     (zero : motive 0) (t : Nat)
@@ -235,57 +399,32 @@ private theorem strongInductionOn {motive : Nat → Prop}
       | 0     => zero
       | n + 1 => succ n ih
 
-script_macro (clear := [n], strategy := true)
-"induction" n:ident : tactic => `(tactic|
-  induction $n:ident
-)
-
-script_macro (clear := [n], strategy := true)
+script_macro (clear := [n], kind := strategy)
 "complete_induction" n:ident : tactic => `(tactic|
   induction $n:ident using strongInductionOn
 )
 
 
-/-! ## 分类讨论 -/
-
-/-- `by_cases h : p`：按命题 `p` 的真假分类讨论，产生 `caseI`（`h : p`）与
-    `caseII`（`h : ¬p`）两个分支。 -/
-script_elab (intro := [h], strategy := true)
-"by_cases" h:ident ":" p:term : tactic => do
-  evalTactic (← `(tactic| open Classical in refine if $h:ident : $p:term then ?caseI else ?caseII))
-
-
 /-! ## Meta Data -/
+
+/-! ### Remark -/
 
 script_macro (clear := [text])
 "remark" text:str : tactic => `(tactic| skip)
 
-script_macro (clear := [code])
-"tex" code:str : tactic => `(tactic| skip)
+/-! ### SVG -/
 
 script_macro (clear := [code])
 "svg" code:str : tactic => `(tactic| skip)
 
+/-! ### LaTeX Component (to SVG) -/
 
-/-! ## LaTeX Components -/
-
-open ProofScript.Extension
-
-private def defaultTikzMetadata : ComponentMetadata := { title := "TikZ" }
-
-private def metadataFromOptional (metadata? : Option (TSyntax `ProofScript.Extension.componentMeta)) :
-    Lean.Elab.Tactic.TacticM ComponentMetadata :=
-  match metadata? with
-  | some metadata =>
-      match parseComponentMetadata metadata.raw with
-      | .ok value => pure value
-      | .error message => throwErrorAt metadata message
-  | none => pure defaultTikzMetadata
-
-private def recordLatexComponent (name : String) (metadata : ComponentMetadata) (code : String) :
-    Lean.Elab.Tactic.TacticM Unit := do
+open Lean.Elab.Tactic in
+private def recordLatexComponent  (metadata : ComponentMetadata)
+                                  (code : String) :
+                                  TacticM Unit := do
   let svg ← compileLatexToSvg code
-  recordStep name [
+  recordStep "latex" [
     ("metadata", componentMetadataJson metadata),
     ("language", Json.str "latex"),
     ("source", Json.str code),
@@ -293,40 +432,19 @@ private def recordLatexComponent (name : String) (metadata : ComponentMetadata) 
   ] [] [] [] do
     evalTactic (← `(tactic| skip))
 
-elab
-"tikz" (ProofScript.Extension.componentMeta)? _code:str : tactic => do
+script_elab (recorder := exclusive)
+"latex" _metadata:componentMeta _code:str : tactic => do
   evalTactic (← `(tactic| skip))
 
 script_recorder
-"tikz" metadata:(ProofScript.Extension.componentMeta)? code:str : tactic => do
-  let metadata ← metadataFromOptional metadata
-  recordLatexComponent "tikz" metadata code.getString
-
-script_elab (record := false)
-"figure" _metadata:ProofScript.Extension.componentMeta _code:str : tactic => do
-  evalTactic (← `(tactic| skip))
-
-script_recorder
-"figure" metadata:ProofScript.Extension.componentMeta code:str : tactic => do
+"latex" metadata:componentMeta code:str : tactic => do
   let metadata ←
     match parseComponentMetadata metadata.raw with
     | .ok value => pure value
     | .error message => throwErrorAt metadata message
-  recordLatexComponent "figure" metadata code.getString
+  recordLatexComponent metadata code.getString
 
-script_elab (record := false)
-"table" _metadata:ProofScript.Extension.componentMeta _code:str : tactic => do
-  evalTactic (← `(tactic| skip))
-
-script_recorder
-"table" metadata:ProofScript.Extension.componentMeta code:str : tactic => do
-  let metadata ←
-    match parseComponentMetadata metadata.raw with
-    | .ok value => pure value
-    | .error message => throwErrorAt metadata message
-  recordLatexComponent "table" metadata code.getString
-
-/-! ## 非形式化证明 `cause` -/
+/-! ### 非形式化证明 -/
 
 script_elab (clear := [cause])
 "cause" cause:str : tactic => do
@@ -334,39 +452,16 @@ script_elab (clear := [cause])
   let target ← goal.getType
   logWarningAt cause m!"`sorryAx` will be used to prove: {target}"
   evalTactic (← `(tactic| sorry))
-macro "cause" cause:str : term => `(script_cause $cause:str)
+macro "cause" cause:str : term => do
+  `(term| script
+    cause $cause:str)
 
-/-! ## 局部断言 `have` -/
 
-script_elab (intro := [h], strategy := true)
-"have" h:ident ":" type:term : tactic => do
-  let goal ← getMainGoal
-  let type ← withMainContext (elabTerm type none)
-  let proofMVar ← withMainContext (mkFreshExprMVar type)
-  proofMVar.mvarId!.setTag `proof
-  let restMVar ← goal.assert h.getId type proofMVar
-  let (_, restMVar') ← restMVar.intro1P
-  replaceMainGoal [restMVar', proofMVar.mvarId!]
+/-! ## 连续计算 `calc` -/
 
-/-! # `calc`：等式/不等式连续推导
-
-直接委托 Lean 原生的 `calc` tactic（原生 tactic 已正确处理 `?_`——
-`closeMainGoalUsing (checkNewUnassigned := false)` + `pushGoals`，把 `?_` 变成新的子目标），
-使其能在 `:= script` 中使用。
-
-录制格式仿照 `infer`：
-- `init`: 第一行左侧的初始项
-- `chain`: 列表，每个元素是 `{relation: 关系符, rhs: 右侧项, proof: := 后面的证明项}`
--/
-
-/-- tactic 版 `calc`：委托 Lean 原生的 `calc` tactic。
-    用 `macro` 而非 `script_macro`，与 `infer` 的 tactic 版保持一致——本体直接展开为原生
-    `calc`（原生 kind `Lean.calcTactic`），录制版由下方手工实现。 -/
-script_macro (record := false)
+script_macro (recorder := exclusive)
 "calc" steps:calcSteps : tactic => do
   `(tactic| calc $steps:calcSteps)
-
-/-! ### 录制版 `_calc`（手动实现）-/
 
 /-- 解析 `calcSteps`，返回 `(关系项, 证明项)` 数组，每步一个。
     `calcSteps` 原生结构：`calcFirstStep (calcStep)*`（见 `Lean.Elab.Calc.mkCalcStepViews`）。
@@ -408,8 +503,7 @@ def decomposeCalcRelation (e : Expr) : Option (Expr × Expr × Expr) :=
 
 /-- 录制版 `_calc`：录制初始项 + 推导链的每一步。
     - `init`: 第一步关系项的左侧
-    - `chain`: 列表，每个元素 `{relation, rhs, proof}`；`proof` 含 `?_` 时录 `{"kind": "hole"}`
-    本体行为与 tactic `calc` 一致（委托原生 `calc` tactic）。 -/
+    - `chain`: 列表，每个元素 `{relation, rhs, proof}`；`proof` 含 `?_` 时录 `{"kind": "hole"}` -/
 script_recorder
 "calc" steps:calcSteps : tactic => do
   -- 解析步骤（语法级）
@@ -444,26 +538,10 @@ script_recorder
     [] [] [] do
       evalTactic (← `(tactic| calc $steps:calcSteps))
 
-/-! # `infer`：连续推导（have 语义）
 
-结构仿 `calc`（连接符换成 `=>`），用于「因为…所以…进而有…」的**命题连续推导**。每一行
-`lhs => rhs := prf`：
+/-! ## 连续推导 `infer` -/
 
-- 第一行 `P => Q := prf`：`prf` 直接给出 `Q` 的证明项，且其中必须包含一个类型为 `P` 的
-  子项（否则 `P` 完全失去意义）。第一行不允许出现 `?_`。
-- 后续行 `_ => Q := MyTheorem arg ?_`：`?_` 指代上一步推导出的结论，且必须有且仅有一个；
-  `_` 也可换成上一步右侧的命题（自动校验链条衔接）。
-
-**tactic 语义（逐步 `have` 式）**：每一行右侧命题都会作为匿名条件加入上下文。后续行的
-`?_` 引用前一行刚加入的匿名条件。最后立刻尝试用最后一条条件闭合目标；若目标不是最后一行的
-结论，则所有推导步骤都保留在上下文中供后续 tactic 使用。
-
-**项语义**：`infer` 同时保留了 `term` 版本（求值出 `T` 的证明项），供 `provide` / `exact`
-等需要项的场合使用。
--/
-
-/-! ### 语法
-    用**单个** `withPosition` 包裹整个步骤序列：`withPosition` 的 savedPos 取「关键字
+/-! 用**单个** `withPosition` 包裹整个步骤序列：`withPosition` 的 savedPos 取「关键字
     skip 尾随空白后的位置」=「第一步起始列」，`colGe` 据此要求「每一步的缩进列 ≥ 第一步缩进」，
     从而可靠地区分「更深的步骤」与「同缩进的后续 tactic」（后者列 < 第一步列，`colGe` 失败终止块）。
     若再套一层 `withPosition((ppLine linebreak inferStep)*)`，savedPos 会被覆盖为「第一步后第一个
@@ -471,8 +549,6 @@ script_recorder
 
 syntax inferStep := ppIndent(colGe term " => " term " := " term)
 syntax inferSteps := withPosition(ppLine inferStep (ppLine linebreak inferStep)*)
-
-/-! ### 第一行的深度检查 -/
 
 /-- 语法树中是否出现 `?_`（syntheticHole）。 -/
 partial def inferContainsSyntheticHole (stx : Syntax) :=
@@ -520,8 +596,6 @@ elab "infer_check_first" P:term " => " Q:term " := " prf:term : term => do
     throwErrorAt prf s!"infer: 第一行的推导失去意义——右侧证明项中必须包含命题 '{pStr}' 的证明"
   return prfExpr
 
-/-! ### `?_` 替换（恰好一个） -/
-
 /-- 把 `stx` 中唯一的一个 `?_` 替换为 `rep`，并返回替换后的语法与 `?_` 个数。 -/
 partial def inferReplaceHole (stx : Syntax) (rep : TSyntax `term) : StateT Nat MacroM Syntax := do
   if stx.getKind == ``syntheticHole then
@@ -542,30 +616,6 @@ def inferReplaceSingleHole (stx : Syntax) (rep : TSyntax `term) : MacroM (TSynta
 /-- `t` 是否是 `_`（hole）。 -/
 def inferIsHoleTerm (t : TSyntax `term) :=
   t.raw.getKind == ``hole
-
-/-! ### 项层 `infer`（链计算） -/
-
-/-- 项版 `infer`：把后续步骤的 `?_` 依次替换为上一步结论，并对「显式左侧命题」与「本行右侧命题」
-    分别加类型标注 `(前值 : L)` / `(证明 : R)` 以校验链条衔接与各行类型。 -/
-script_macro (record := false)
-"infer" steps:inferSteps : term => do
-  match steps with
-  | `(inferSteps|
-        $step0:inferStep
-        $rest*) => do
-      let `(inferStep| $P:term => $Q:term := $prf1:term) := step0
-        | Macro.throwError "infer: 第一步语法无效"
-      let mut body : TSyntax `term ← `(infer_check_first $P:term => $Q:term := $prf1:term)
-      for step in rest do
-        let `(inferStep| $L:term => $R:term := $prf:term) := step
-          | Macro.throwError "infer: 推导步骤语法无效"
-        let prev ← if inferIsHoleTerm L then pure body else `(($body : $L))
-        let prf' ← inferReplaceSingleHole prf.raw prev
-        body ← `(($prf' : $R))
-      return body
-  | _ => Macro.throwError "infer: 需要至少一个推导步骤"
-
-/-! ### tactic 层 `infer`（逐步匿名 have 语义） -/
 
 /-- 将 `infer` 链展开为逐步匿名 `have`。每一步都进入局部上下文，后一步的 `?_` 用 `this`
     指向前一步刚产生的匿名条件。最后只尝试使用最后一步闭合目标。 -/
@@ -598,12 +648,12 @@ def buildInferTactic (steps : Syntax) : MacroM (TSyntax `tactic) := do
   let seq : TSyntax ``tacticSeq := ⟨buildTacticSeq tactics⟩
   `(tactic| ($seq:tacticSeq))
 
-/-- tactic 版 `infer`：每个推导结论都作为匿名条件加入上下文。 -/
-script_macro (record := false)
+script_macro (recorder := exclusive)
 "infer" steps:inferSteps : tactic => do
   buildInferTactic steps.raw
 
-/-! ### 录制版 `_script_infer`（手动实现）-/
+macro "infer" steps:inferSteps : term => do
+  `(term| script infer $steps:inferSteps)
 
 /-- 解析 `inferSteps`，提取初始命题和每一步的信息。
     返回：(初始命题, [(右侧命题, 证明项)]) -/
@@ -625,10 +675,6 @@ def parseInferSteps (steps : Syntax) : MacroM (TSyntax `term × Array (TSyntax `
     chain := chain.push (R, prf)
   return (P, chain)
 
-/-- 录制版 `_script_infer`：录制初始命题 + 推导链的每一步。
-    - `init`: 第一行左侧的初始命题
-    - `chain`: 列表，每个元素是 `{rhs: 右侧命题, proof: := 后面的证明项}`
-    本体行为与 tactic `infer` 一致（逐步匿名 `have`，最后 `try exact this`）。 -/
 script_recorder
 "infer" steps:inferSteps : tactic => do
   -- 解析步骤
@@ -642,7 +688,7 @@ script_recorder
   -- Elaborate 推导链的每一步（只录制 rhs 和 proof，不执行替换逻辑）
   let mut chainJson := #[]
   for (rhs, prf) in chain do
-    -- 直接 elaborate rhs 和 prf（prf 中的 ?_ 在实际执行时由 infer term macro 处理）
+    -- 直接 elaborate rhs 和 prf（prf 中的 ?_ 在策略执行时由 infer tactic macro 处理）
     let rhsExpr ← withMainContext do
       Lean.Elab.Tactic.elabTerm rhs none
     -- 对于 prf，如果包含 ?_，我们只录制语法结构，不 elaborate
@@ -658,7 +704,6 @@ script_recorder
         ProofScript.Expr2JSON prfExpr
     let rhsJson ← withMainContext <| ProofScript.Expr2JSON rhsExpr
     chainJson := chainJson.push (Json.mkObj [("rhs", rhsJson), ("proof", prfJson)])
-  -- 录制
   recordStep "infer"
     [("init", initJson), ("chain", Json.arr chainJson)]
     [] [] [] do

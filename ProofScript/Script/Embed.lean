@@ -30,7 +30,7 @@ namespace ProofScript
 
 /-! ### 本体（非录制）：校验是定理应用，然后 `let h := term` -/
 
-script_elab (record := false)
+script_elab (recorder := exclusive)
 "embed" proof:term "as" h:ident : tactic => do
   let e ← Lean.Elab.Tactic.withMainContext <| Lean.Elab.Tactic.elabTerm proof none
   let e ← Lean.instantiateMVars e

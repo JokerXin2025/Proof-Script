@@ -1,5 +1,5 @@
 import ProofScript.References.State
-import ProofScript.Extension.State
+import ProofScript.Extension.Page.State
 
 open Lean
 

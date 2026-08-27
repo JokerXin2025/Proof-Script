@@ -1,3 +1,3 @@
-import ProofScript.Script.Builtin
+import ProofScript.Script.Basic
 import ProofScript.Script.Embed
 import ProofScript.Paper

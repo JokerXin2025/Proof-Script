@@ -48,9 +48,9 @@ macro "by_contra_core" : tactic => `(tactic|
   | refine @Classical.byContradiction _ ?_
 )
 
-syntax (name := byContra) "original_by_contra" (ppSpace colGt rcasesPatMed)? (" : " term)? : tactic
+syntax (name := byContra) "by_contra" (ppSpace colGt rcasesPatMed)? (" : " term)? : tactic
 
 macro_rules
-| `(tactic| original_by_contra $[$pat?]? $[: $ty?]?) => do
+| `(tactic| by_contra $[$pat?]? $[: $ty?]?) => do
   let pat ← pat?.getDM `(rcasesPatMed| $(mkIdent `this):ident)
   `(tactic| (by_contra_core; rintro ($pat:rcasesPatMed) $[: $ty?]?))

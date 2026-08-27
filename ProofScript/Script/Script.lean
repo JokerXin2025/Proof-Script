@@ -1,9 +1,9 @@
 import ProofScript.Script.Core
 import ProofScript.Script.Record
-import ProofScript.Config
+import ProofScript.Script.Config
 import ProofScript.Script.ScriptDB
-import ProofScript.Extension.Path
-import ProofScript.Extension.State
+import ProofScript.Extension.Page.Path
+import ProofScript.Extension.Page.State
 import ProofScript.References.Metadata
 
 open Lean
@@ -182,9 +182,9 @@ def nativeHintMap : List (String × String) := [
   ("field_simp", "Use `field` instead of `field_simp`."),
   ("have", "Use a subgoal block instead of `have`."),
   ("refine", "Use `provide` or `apply_h` instead of `refine`."),
-  ("rcases", "Use `by_cases` or `obtain` instead of `rcases`."),
+  ("rcases", "Use `cases_on` or `obtain_exist` instead of `rcases`."),
   ("obtain", "Use `obtain` — it is allowed in `script` blocks."),
-  ("by_cases", "Use `by_cases` — it is allowed in `script` blocks."),
+  ("by_cases", "Use `cases_on` — it is allowed in `script` blocks."),
   ("by_contra", "Use `by_contra` — it is allowed in `script` blocks."),
   ("exfalso", "Use `trivial` instead of `exfalso`.")
 ]

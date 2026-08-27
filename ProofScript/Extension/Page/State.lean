@@ -1,4 +1,4 @@
-import ProofScript.Extension.Data
+import ProofScript.Extension.Page.Data
 
 open Lean
 

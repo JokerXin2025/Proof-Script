@@ -1,6 +1,10 @@
-import ProofScript.Extension.Data
+import ProofScript.Extension.Component.Core
+
+open ProofScript.Extension
+
 
 namespace ProofScript.Extension.ProofText
+
 
 private def validLabel (label : String) : Bool :=
   match label.toList with
@@ -162,7 +166,9 @@ partial def parse (rawSource : String) : Except String (Array Block) := do
       let title ← parseInline title
       return ← loop (index + 1) (out.push (.heading level label title))
     if line.startsWith "- " then
-      let rec collectUnordered (i : Nat) (items : Array ListItem) : Except String (Nat × Array ListItem) := do
+      let rec collectUnordered  (i : Nat)
+                                (items : Array ListItem)
+                                : Except String (Nat × Array ListItem) := do
         if i < lines.size && lines[i]!.startsWith "- " then
           let content ← parseInline (lines[i]!.drop 2 |>.toString)
           collectUnordered (i + 1) (items.push { content := #[.paragraph content] })
@@ -173,7 +179,9 @@ partial def parse (rawSource : String) : Except String (Array Block) := do
       let start := match orderedItem? line with
         | some (ordinal, _) => ordinal
         | none => 1
-      let rec collectOrdered (i : Nat) (items : Array ListItem) : Except String (Nat × Array ListItem) := do
+      let rec collectOrdered  (i : Nat)
+                              (items : Array ListItem)
+                              : Except String (Nat × Array ListItem) := do
         if i < lines.size then
           if lines[i]!.startsWith "+ " then
             let content ← parseInline (lines[i]!.drop 2 |>.toString)
@@ -206,4 +214,25 @@ partial def parse (rawSource : String) : Except String (Array Block) := do
     loop next (out.push (.paragraph content))
   loop 0 #[]
 
+
 end ProofScript.Extension.ProofText
+
+
+private partial def headingLabels (blocks : Array Block) : Array String := Id.run do
+  let mut labels := #[]
+  for block in blocks do
+    match block with
+    | .heading _ (some label) _ => labels := labels.push label
+    | .quote content => labels := labels ++ headingLabels content
+    | .orderedList _ items | .unorderedList items =>
+        for item in items do labels := labels ++ headingLabels item.content
+    | _ => pure ()
+  return labels
+
+elab "#text" source:str : command => do
+  let raw := source.getString
+  let blocks ←  match ProofText.parse raw with
+                | .ok blocks => pure blocks
+                | .error message => throwErrorAt source message
+  let labels := (headingLabels blocks).map fun label => (.heading, label)
+  addPageComponent source.raw (.text { source := raw, blocks }) labels

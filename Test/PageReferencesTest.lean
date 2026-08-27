@@ -15,7 +15,8 @@ theorem referencedResult (P : Prop) (h : P) : P := h
 
 #theorem @[theorem_info (name := "Uses Reference", label := "uses-reference")] usesReference
     (P : Prop) (h : P) : P := script
-  provide (referencedResult P h)
+  apply_thm referencedResult
+  apply_h h
 
 #references
 

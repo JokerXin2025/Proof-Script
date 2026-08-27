@@ -1,4 +1,9 @@
 
+import ProofScript.Extension.Component.Core
+
+open Lean
+open Lean.Elab.Command (CommandElabM liftIO)
+
 namespace ProofScript.Extension
 
 
@@ -47,6 +52,23 @@ def compileLatexToSvg (source : String) : IO String := do
     unless dvisvgm.exitCode == 0 do
       throw <| IO.userError (processError "dvisvgm" dvisvgm)
     cleanSvg <$> readFile (dir / "component.svg")
+
+private def addLatexComponent (metadataStx : Syntax) (codeStx : TSyntax `str) : CommandElabM Unit := do
+  let metadata ← match parseComponentMetadata metadataStx with
+    | .ok metadata => pure metadata
+    | .error message => throwErrorAt metadataStx message
+  let svg ← liftIO <| compileLatexToSvg codeStx.getString
+  let labels := match metadata.label with
+    | some label => #[(ReferenceKind.figure, label)]
+    | none => #[]
+  addPageComponent codeStx.raw (.latex { metadata, source := codeStx.getString, svg }) labels
+
+syntax "#latex" componentMeta str : command
+
+open Lean.Elab.Command in
+elab_rules : command
+  | `(command| #latex $metadata:componentMeta $code:str) =>
+      addLatexComponent metadata.raw code
 
 
 end ProofScript.Extension

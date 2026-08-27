@@ -1,7 +1,7 @@
 import ProofScript.Utils
 import ProofScript.Script.Core
-import ProofScript.JsonBox
-import ProofScript.ExprJSON
+import ProofScript.Script.JsonBox
+import ProofScript.Script.ExprJSON
 import ProofScript.References.Collect
 
 open Lean (Json Name Syntax)
@@ -193,7 +193,7 @@ def recordStrategy (stepName : String) (nodes : List String)
   startStrategy tag nodes
   -- ④ 执行策略本体
   action
-  -- ⑤ 执行后序列化（intro 参数 + neither 参数的后值，如 `by_cases h : p` 的 `h`）
+  -- ⑤ 执行后序列化（intro 参数 + neither 参数的后值，如 `cases_on p` 的 `h`）
   let postElab ← postTerms.mapM fun (n, pr) => do
     match (← serializePostParam pr) with
     | some v => return some (n, v)

@@ -4,10 +4,10 @@ import Lean.Parser.Term
 import ProofScript.Script.Record
 
 open Lean (Syntax TSyntax getEnv quote mkIdent mkNode mkNullNode Name.mkSimple)
-open Lean.Parser (atomic sepBy optional ppSpace many1
-                  nonReservedSymbol runParserCategory suppressInsideQuot)
+open Lean.Parser (atomic darrow sepBy optional ppSpace many1 termParser withPosition
+                   nonReservedSymbol runParserCategory suppressInsideQuot)
 open Lean.Parser.Term (ident doSeqItem doSeqIndent)
-open Lean.Parser.Command (macroArg macroTail elabTail docComment)
+open Lean.Parser.Command (macroArg macroRhs docComment)
 open Lean.Parser.Tactic (quot)
 open Lean.Elab.Command (CommandElabM elabCommand liftIO expandMacroArg elabSyntax)
 
@@ -114,9 +114,11 @@ partial def eraseMacroScopes (stx : Syntax) : Syntax :=
 private def registerTacticRegistration (registration : ScriptTacticRegistration) :
     CommandElabM Unit := do
   liftIO <| ScriptTacticRegistrationsRef.modify fun cur =>
-    cur.filter (fun r => r.sourceKind != registration.sourceKind) ++ [registration]
+    cur.filter (fun r => r.name != registration.name || r.sourceKind != registration.sourceKind) ++
+      [registration]
   let init ← `(command| initialize do ProofScript.ScriptTacticRegistrationsRef.modify (fun cur =>
-    cur.filter (fun r => r.sourceKind != $(Lean.quote registration.sourceKind)) ++ [{
+    cur.filter (fun r => r.name != $(Lean.quote registration.name) ||
+      r.sourceKind != $(Lean.quote registration.sourceKind)) ++ [{
       name := $(Lean.quote registration.name)
       sourceKind := $(Lean.quote registration.sourceKind)
       executionKind := $(Lean.quote registration.executionKind)
@@ -170,23 +172,35 @@ private def buildRawPair  (key : String)
   else
     `(term| ($(Lean.quote key), ParamRaw.one (($val:ident).raw)))
 
+/-- 记录器生成方式。`exclusive` 表示仅使用手写的 `script_recorder`。 -/
+inductive ScriptRecorder where
+  | auto
+  | exclusive
+  deriving BEq
+
+/-- 脚本项种类。 -/
+inductive ScriptKind where
+  | step
+  | strategy
+  deriving BEq
+
 /-- 策略录制配置。所有字段在编译期求值。
     - `intro`：由该策略**产生**的新 fvar 对应的**参数名**列表（如 `intro_h` 的 `name`），
       只在策略执行**之后** elaborate + 记录。
     - `clear`：由该策略**删除**的原 fvar 对应的**参数名**列表（如 `induction` 的 `n`），
       只在策略执行**之前** elaborate + 记录。
-    - `strategy`：是否为概略策略；具体分支名由每次调用后连续的 `| case =>` 自动收集。 -/
+    - `kind`：`strategy` 表示概略策略；具体分支名由每次调用后连续的 `| case =>` 自动收集。 -/
 structure ScriptCfg where
   intro : List String := []
   clear : List String := []
-  strategy : Bool := false
-  record : Bool := true
+  recorder : ScriptRecorder := .auto
+  kind : ScriptKind := .step
 
 def emptyScriptCfg : ScriptCfg := {
   intro := [],
   clear := [],
-  strategy := false,
-  record := true
+  recorder := .auto,
+  kind := .step
 }
 
 /-- 注册策略的录制 parser kind，同时覆盖同名的旧映射。 -/
@@ -202,16 +216,16 @@ private def registerRecordingKind (name : String) (kind : Lean.Name) : CommandEl
     参数按 `cfg.intro`/`cfg.clear` 分三组（内联 / 执行前 / 执行后），分别交给
     `recordStep`/`recordStrategy` 在正确时机序列化。 -/
 private def genRecording  (name : String)
-                           (syntaxName : String)
-                          (args : Array (TSyntax ``macroArg))
-                          (pat : Syntax)
-                          (cat : TSyntax `ident)
-                          (cfg : ScriptCfg)
-                          : CommandElabM Unit := do
+                            (syntaxName : String)
+                           (args : Array (TSyntax ``macroArg))
+                           (pat : Syntax)
+                           (cfg : ScriptCfg)
+                           : CommandElabM Unit := do
+  let tacticCat : TSyntax `ident := ⟨mkIdent `tactic⟩
   -- ① 录制版参数模式：args[0]（策略名字面量）换成 "_name"，其余原样
   let mut recArgs := args.mapIdx fun i a => if i == 0 then ⟨mkNameArg syntaxName⟩ else a
   let strategyCasesId : TSyntax `ident := ⟨mkIdent `strategyCases⟩
-  if cfg.strategy then
+  if cfg.kind == .strategy then
     recArgs := recArgs.push (← `(macroArg| "_strategy_cases"))
     recArgs := recArgs.push (← `(macroArg| strategyCases:str))
   -- ② 本体调用：patArgs 每个元素——`token_antiquot`（名字/字面量 token）取 `.getArg 0`（裸 atom），
@@ -251,7 +265,7 @@ private def genRecording  (name : String)
     | _ => pure ()
   -- ④ recordStep / recordStrategy 调用（内联字段 / clear / intro / neither 四组传入）
   let inlineFields ← buildFields inlineNames inlineVals
-  let recCall ← if cfg.strategy then
+  let recCall ← if cfg.kind == .strategy then
       `(doElem| recordStrategy $(Lean.quote name) (($strategyCasesId:ident).getString.splitOn "\n") [$inlineFields,*] [$preFields,*] [$postFields,*] [$bothFields,*] (Lean.Elab.Tactic.evalTactic (← $callQuot:term)))
     else
       `(doElem| recordStep $(Lean.quote name) [$inlineFields,*] [$preFields,*] [$postFields,*] [$bothFields,*] (Lean.Elab.Tactic.evalTactic (← $callQuot:term)))
@@ -261,30 +275,30 @@ private def genRecording  (name : String)
   --    同时把「名字 → 录制版 kind」存进 ref，供录制重写精确替换 kind
   --    （`by_cases` 等与 Lean 原生同名策略，本体 kind 带 `_1` 后缀，无法从本体 kind 字符串截取推导）。
   let (recStxParts, recPatArgs) := (← recArgs.mapM expandMacroArg).unzip
-  let recKind ← elabSyntax (← `(syntax $[$recStxParts]* : $cat))
+  let recKind ← elabSyntax (← `(syntax $[$recStxParts]* : $tacticCat))
   let recPat := ⟨mkNode recKind recPatArgs⟩
   let recKindId : TSyntax `ident := ⟨mkIdent recKind⟩
   let doSeq : TSyntax ``doSeqIndent := ⟨mkDoSeq bodyElems⟩
-  let recCmd ← `(command| elab_rules (kind := $recKindId) : $cat:ident | `($recPat) => do $doSeq:doSeqIndent)
+  let recCmd ← `(command| elab_rules (kind := $recKindId) : $tacticCat | `($recPat) => do $doSeq:doSeqIndent)
   elabCommand (eraseMacroScopes recCmd.raw)
   -- ⑥ 存「名字 → 录制版 kind」映射，两路：
   --    编译时 `IO.Ref.modify`（同文件可见）+ 生成 `initialize` 块（后续 import 的模块运行时可见）。
   --    这样录制路径能精确替换本体 kind（含 `_1` 后缀）为录制版 kind。
   registerRecordingKind name recKind
 
-/-! ### 配置项（`intro` / `clear` / `strategy`） -/
+/-! ### 配置项（`intro` / `clear` / `recorder` / `kind`） -/
 
 /-- 配置值：`[ident, ident, …]`（可空 `[]`）。直接写标识符名（与 `syntax` 参数名一致），
     不带双引号、不经 `evalExprWithElab` 求值——从语法树里直接取 ident 名字。 -/
 def scriptCfgIdents := leading_parser "[" >> sepBy ident ", " >> "]"
 
-def scriptCfgBool := leading_parser nonReservedSymbol "true" <|> nonReservedSymbol "false"
-
 def scriptCfgItem := leading_parser
   (atomic ("intro" >> ":=" >> scriptCfgIdents)) <|>
   (atomic ("clear" >> ":=" >> scriptCfgIdents)) <|>
-  (atomic ("strategy" >> ":=" >> scriptCfgBool)) <|>
-  (atomic ("record" >> ":=" >> scriptCfgBool))
+  (atomic (nonReservedSymbol "recorder" >> ":=" >>
+    (nonReservedSymbol "auto" <|> nonReservedSymbol "exclusive"))) <|>
+  (atomic (nonReservedSymbol "kind" >> ":=" >>
+    (nonReservedSymbol "step" <|> nonReservedSymbol "strategy")))
 
 def scriptCfg := leading_parser "(" >> sepBy scriptCfgItem ", " >> ")"
 
@@ -306,7 +320,8 @@ private def parseScriptCfg  (cfg : Syntax)
   let mut result : ScriptCfg := {
     intro := [],
     clear := [],
-    strategy := false
+    recorder := .auto,
+    kind := .step
   }
   for item in cfg.getArgs[1]!.getArgs do
     if item.isAtom then continue
@@ -314,8 +329,10 @@ private def parseScriptCfg  (cfg : Syntax)
     match atoms.head? with
     | some "intro" => result := { result with intro := collectIdentNames item }
     | some "clear" => result := { result with clear := collectIdentNames item }
-    | some "strategy" => result := { result with strategy := atoms.contains "true" }
-    | some "record" => result := { result with record := atoms.contains "true" }
+    | some "recorder" =>
+        result := { result with recorder := if atoms.contains "exclusive" then .exclusive else .auto }
+    | some "kind" =>
+        result := { result with kind := if atoms.contains "strategy" then .strategy else .step }
     | _ => pure ()
   pure result
 
@@ -353,44 +370,50 @@ private def extractName (args : Array Syntax)
   | `(macroArg| $s:str) => pure s.getString
   | _ => throwError "script_macro/script_elab/script_recorder: 第一个参数必须是字符串字面量（策略名）"
 
+def tacticCategory := nonReservedSymbol "tactic"
+def scriptMacroTacticTail := leading_parser atomic (" : " >> tacticCategory) >> darrow >> macroRhs
+def scriptElabTacticTail := leading_parser
+  atomic (" : " >> tacticCategory) >> darrow >> withPosition termParser
+
  /-- `script_macro`：生成 `script_` 执行入口和独立录制入口。
-    复用 `macro` 命令的 `macroArg`/`macroTail`，`suppressInsideQuot` 避免 rhs 贪婪吞掉后续 doc comment。 -/
+     复用 `macro` 命令的参数和 RHS parser，但固定为显式的 `: tactic`。 -/
 @[command_parser] def scriptMacro := leading_parser
   suppressInsideQuot <|
-    optional docComment >> "script_macro" >> optional scriptCfg >> many1 (ppSpace >> macroArg) >> macroTail
+    optional docComment >> "script_macro" >> optional scriptCfg >> many1 (ppSpace >> macroArg) >> scriptMacroTacticTail
 
  /-- `script_elab`：生成 `script_` 执行入口和独立录制入口。 -/
 @[command_parser] def scriptElab := leading_parser
   suppressInsideQuot <|
-    optional docComment >> "script_elab" >> optional scriptCfg >> many1 (ppSpace >> macroArg) >> elabTail
+    optional docComment >> "script_elab" >> optional scriptCfg >> many1 (ppSpace >> macroArg) >> scriptElabTacticTail
 
 /-- `script_recorder`：为禁用自动录制的策略手写 `_script_<name>` elaborator。
     参数形式与 `script_elab` 相同，但首个字符串仍填写不带前缀的原策略名。 -/
 @[command_parser] def scriptRecorder := leading_parser
   suppressInsideQuot <|
-    optional docComment >> "script_recorder" >> many1 (ppSpace >> macroArg) >> elabTail
+    optional docComment >> "script_recorder" >> many1 (ppSpace >> macroArg) >> scriptElabTacticTail
 
 open Lean.Elab.Command in
 elab_rules : command
-  | `(command| $[$doc?:docComment]? script_macro%$_tk $[$cfg:scriptCfg]? $args:macroArg* : $cat:ident => $rhs) => do
+  | `(command| $[$doc?:docComment]? script_macro%$_tk $[$cfg:scriptCfg]? $args:macroArg* : tactic => $rhs) => do
+    let tacticCat : TSyntax `ident := ⟨mkIdent `tactic⟩
     let name ← extractName args
     let cfg' ← match cfg with
       | some c => parseScriptCfg c
       | none => pure emptyScriptCfg
     validateCfgParams name cfg' args
-    if cfg'.record then validateParamKinds name args
+    if cfg'.recorder == .auto then validateParamKinds name args
     let (stxParts, patArgs) := (← args.mapM expandMacroArg).unzip
-    let kind ← elabSyntax (← `(syntax $[$stxParts]* : $cat))
+    let kind ← elabSyntax (← `(syntax $[$stxParts]* : $tacticCat))
     let pat : TSyntax `term := ⟨mkNode kind patArgs⟩
     let prefixedArgs : Array (TSyntax ``macroArg) := args.mapIdx fun i a => if i == 0 then (⟨mkScriptNameArg name⟩ : TSyntax ``macroArg) else a
     let (prefixedParts, prefixedPatArgs) := (← prefixedArgs.mapM expandMacroArg).unzip
-    let prefixedKind ← elabSyntax (← `(syntax $[$prefixedParts]* : $cat))
+    let prefixedKind ← elabSyntax (← `(syntax $[$prefixedParts]* : $tacticCat))
     let prefixedPat : TSyntax `term := ⟨mkNode prefixedKind prefixedPatArgs⟩
     let rhsRaw := rhs.raw
     let macroRulesCmd ←
       if rhsRaw.getArgs.size == 1 then
         let rhsTerm := ⟨rhsRaw[0]⟩
-        `(macro_rules | `($prefixedPat) => Functor.map (@Lean.TSyntax.raw $(Lean.quote cat.getId.eraseMacroScopes)) $rhsTerm)
+        `(macro_rules | `($prefixedPat) => Functor.map (@Lean.TSyntax.raw `tactic) $rhsTerm)
       else
         let rhsBody := ⟨rhsRaw[1]⟩
         `(macro_rules | `($prefixedPat) => `($rhsBody))
@@ -398,20 +421,20 @@ elab_rules : command
     let originalMacro ←
       if rhsRaw.getArgs.size == 1 then
         let rhsTerm := ⟨rhsRaw[0]⟩
-        `(macro_rules | `($pat) => Functor.map (@Lean.TSyntax.raw $(Lean.quote cat.getId.eraseMacroScopes)) $rhsTerm)
+        `(macro_rules | `($pat) => Functor.map (@Lean.TSyntax.raw `tactic) $rhsTerm)
       else
         let rhsBody := ⟨rhsRaw[1]⟩
         `(macro_rules | `($pat) => `($rhsBody))
     elabCommand originalMacro
-    -- ② 生成录制版（复用本体的 `pat`，纯语法级）；`record := false` 时跳过，录制版由用户手写
-    if cfg'.record then genRecording name ("script_" ++ name) args prefixedPat.raw cat cfg' else pure ()
+    -- ② 生成录制版（复用本体的 `pat`，纯语法级）；`exclusive` 时由用户手写录制版
+    if cfg'.recorder == .auto then genRecording name ("script_" ++ name) args prefixedPat.raw cfg' else pure ()
     liftIO <| ScriptTacticKindsRef.modify (fun cur =>
       if cur.any (fun (n, _) => n == name) then cur else cur ++ [(name, prefixedKind)])
     let kindInit ← `(command| initialize do ProofScript.ScriptTacticKindsRef.modify (fun cur =>
       if cur.any (fun (n, _) => n == $(Lean.quote name)) then cur
       else cur ++ [($(Lean.quote name), $(Lean.quote prefixedKind))]))
     elabCommand (eraseMacroScopes kindInit.raw)
-    let recordingKind ← if cfg'.record then do
+    let recordingKind ← if cfg'.recorder == .auto then do
       pure <| (← getScriptRecordingKinds).find? (fun (n, _) => n == name) |>.map Prod.snd
     else pure none
     registerTacticRegistration {
@@ -419,39 +442,40 @@ elab_rules : command
       sourceKind := kind
       executionKind := prefixedKind
       recordingKind := recordingKind
-      «strategy» := cfg'.strategy
+      «strategy» := cfg'.kind == .strategy
     }
     -- ③ 记录策略元数据
-    registerStrategyMetadata name cfg'.strategy
+    registerStrategyMetadata name (cfg'.kind == .strategy)
 
 open Lean.Elab.Command in
 elab_rules : command
-  | `(command| $[$doc?:docComment]? script_elab%$_tk $[$cfg:scriptCfg]? $args:macroArg* : $cat:ident => $rhs) => do
+  | `(command| $[$doc?:docComment]? script_elab%$_tk $[$cfg:scriptCfg]? $args:macroArg* : tactic => $rhs) => do
+    let tacticCat : TSyntax `ident := ⟨mkIdent `tactic⟩
     let name ← extractName args
     let cfg' ← match cfg with
       | some c => parseScriptCfg c
       | none => pure emptyScriptCfg
     validateCfgParams name cfg' args
-    if cfg'.record then validateParamKinds name args
+    if cfg'.recorder == .auto then validateParamKinds name args
     -- 定义仅带 `script_` 前缀的执行版 elaborator。
     let (stxParts, patArgs) := (← args.mapM expandMacroArg).unzip
-    let kind ← elabSyntax (← `(syntax $[$stxParts]* : $cat))
+    let kind ← elabSyntax (← `(syntax $[$stxParts]* : $tacticCat))
     let pat : TSyntax `term := ⟨mkNode kind patArgs⟩
     let prefixedArgs : Array (TSyntax ``macroArg) := args.mapIdx fun i a => if i == 0 then (⟨mkScriptNameArg name⟩ : TSyntax ``macroArg) else a
     let (prefixedParts, prefixedPatArgs) := (← prefixedArgs.mapM expandMacroArg).unzip
-    let prefixedKind ← elabSyntax (← `(syntax $[$prefixedParts]* : $cat))
+    let prefixedKind ← elabSyntax (← `(syntax $[$prefixedParts]* : $tacticCat))
     let prefixedPat : TSyntax `term := ⟨mkNode prefixedKind prefixedPatArgs⟩
-    elabCommand (← `(elab_rules : $cat | `($prefixedPat) => $rhs))
-    elabCommand (← `(elab_rules : $cat | `($pat) => $rhs))
-    -- ② 生成录制版（复用本体的 `pat`，纯语法级）；`record := false` 时跳过，录制版由用户手写
-    if cfg'.record then genRecording name ("script_" ++ name) args prefixedPat.raw cat cfg' else pure ()
+    elabCommand (← `(elab_rules : $tacticCat | `($prefixedPat) => $rhs))
+    elabCommand (← `(elab_rules : $tacticCat | `($pat) => $rhs))
+    -- ② 生成录制版（复用本体的 `pat`，纯语法级）；`exclusive` 时由用户手写录制版
+    if cfg'.recorder == .auto then genRecording name ("script_" ++ name) args prefixedPat.raw cfg' else pure ()
     liftIO <| ScriptTacticKindsRef.modify (fun cur =>
       if cur.any (fun (n, _) => n == name) then cur else cur ++ [(name, prefixedKind)])
     let kindInit ← `(command| initialize do ProofScript.ScriptTacticKindsRef.modify (fun cur =>
       if cur.any (fun (n, _) => n == $(Lean.quote name)) then cur
       else cur ++ [($(Lean.quote name), $(Lean.quote prefixedKind))]))
     elabCommand (eraseMacroScopes kindInit.raw)
-    let recordingKind ← if cfg'.record then do
+    let recordingKind ← if cfg'.recorder == .auto then do
       pure <| (← getScriptRecordingKinds).find? (fun (n, _) => n == name) |>.map Prod.snd
     else pure none
     registerTacticRegistration {
@@ -459,21 +483,22 @@ elab_rules : command
       sourceKind := kind
       executionKind := prefixedKind
       recordingKind := recordingKind
-      «strategy» := cfg'.strategy
+      «strategy» := cfg'.kind == .strategy
     }
     -- ③ 记录策略元数据
-    registerStrategyMetadata name cfg'.strategy
+    registerStrategyMetadata name (cfg'.kind == .strategy)
 
 open Lean.Elab.Command in
 elab_rules : command
-  | `(command| $[$doc?:docComment]? script_recorder%$_tk $args:macroArg* : $cat:ident => $rhs) => do
+  | `(command| $[$doc?:docComment]? script_recorder%$_tk $args:macroArg* : tactic => $rhs) => do
+    let tacticCat : TSyntax `ident := ⟨mkIdent `tactic⟩
     let name ← extractName args
     let recArgs : Array (TSyntax ``macroArg) := args.mapIdx fun i a =>
       if i == 0 then (⟨mkNameArg ("script_" ++ name)⟩ : TSyntax ``macroArg) else a
     let (recParts, recPatArgs) := (← recArgs.mapM expandMacroArg).unzip
-    let recKind ← elabSyntax (← `(syntax $[$recParts]* : $cat))
+    let recKind ← elabSyntax (← `(syntax $[$recParts]* : $tacticCat))
     let recPat : TSyntax `term := ⟨mkNode recKind recPatArgs⟩
-    elabCommand (← `(elab_rules : $cat | `($recPat) => $rhs))
+    elabCommand (← `(elab_rules : $tacticCat | `($recPat) => $rhs))
     registerRecordingKind name recKind
     setRegistrationRecordingKind name recKind
 

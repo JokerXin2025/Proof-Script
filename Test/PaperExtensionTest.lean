@@ -29,7 +29,7 @@ theorem example : True := by
 
 #theorem @[theorem_info (name := "Paper Main", label := "paper-main")]
   paperMain (P : Prop) (h : P) : P := script
-  provide h
+  apply_h h
 
 #theorem defaultDisplayName : True := script
   trivial

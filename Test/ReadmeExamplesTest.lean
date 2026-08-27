@@ -1,5 +1,7 @@
 import ProofScript
 
+example : True := cause "term wrapper"
+
 theorem readmeImplicationChain
     (P Q R : Prop) (hPQ : P → Q) (hQR : Q → R) : P → R := script
   intro_h hP
@@ -7,7 +9,7 @@ theorem readmeImplicationChain
     P => Q := hPQ hP
     _ => R := hQR ?_
 
-script_macro (record := false)
+script_macro (recorder := exclusive)
 "readme_finish" proof:term : tactic => `(tactic| exact $proof:term)
 
 script_recorder
@@ -25,5 +27,5 @@ example (P : Prop) (h : P) : P := script
 
 example : ∃ n : Nat, n = 0 := script
   witness
-  | prep => provide 0
+  | data => provide 0
   | proof => trivial

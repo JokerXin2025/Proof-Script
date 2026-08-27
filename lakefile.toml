@@ -8,6 +8,7 @@ name = "ProofScript"
 [[lean_lib]]
 name = "Test"
 roots = [
+  "Test.BasicRestrictionsTest",
   "Test.CalcTest",
   "Test.CrossModuleTest",
   "Test.EmbedCrossModuleDecl",
@@ -28,6 +29,7 @@ roots = [
   "Test.PageReferencesTest",
   "Test.ReferencesOptionTest",
   "Test.ReadmeExamplesTest",
+  "Test.SemanticStrategiesTest",
   "Test.TheoremInfoTest",
   "Test.TheoremInfoCommandTest",
   "Test.TacticRewriteTest",

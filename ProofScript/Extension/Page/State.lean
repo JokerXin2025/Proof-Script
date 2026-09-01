@@ -46,7 +46,7 @@ def closePage (env : Environment)
               : Except String Environment := do
   let state := getPageState env
   if state.exported then
-    throw "#page_end may only appear once in a module"
+    throw "page_end may only appear once in a module"
   return modifyPageState env fun state => { state with exported := true }
 
 

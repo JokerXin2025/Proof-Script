@@ -4,7 +4,7 @@ import Lean
 namespace ProofScript
 
 
-/-- 控制 `#theorem` 录制期是否自动采集被引用定理的信息。 -/
+/-- 控制 `#theorem`/`#lemma` 是否自动采集被引用定理的信息。 -/
 register_option proofScript.references.enabled : Bool := {
   defValue := true
   descr := "enable automatic theorem-reference collection during Proof-Script recording"

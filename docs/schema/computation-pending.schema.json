@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://proof-script.local/schema/computation-pending-1.0.0.json",
+  "title": "Proof-Script Pending Computation Entry",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "abi",
+    "bundleId",
+    "entry",
+    "wrapper",
+    "module",
+    "functionType",
+    "source"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "abi": { "const": "proof-script-json-v1" },
+    "bundleId": { "type": "string", "minLength": 1 },
+    "entry": { "type": "string", "minLength": 1 },
+    "wrapper": { "type": "string", "minLength": 1 },
+    "module": { "type": "string", "minLength": 1 },
+    "functionType": {
+      "type": "object",
+      "required": ["input", "output", "errorMode"],
+      "properties": {
+        "input": { "type": "string", "minLength": 1 },
+        "output": { "type": "string", "minLength": 1 },
+        "errorMode": { "enum": ["pure", "except"] }
+      },
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "required": ["file", "start", "stop"],
+      "properties": {
+        "file": { "type": "string" },
+        "start": { "type": "integer", "minimum": 0 },
+        "stop": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

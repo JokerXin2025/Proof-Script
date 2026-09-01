@@ -12,7 +12,6 @@ LEAN_PATH=".lake/build/lib/lean" lake env lean -o EmbedCrossModuleDecl.olean Tes
 LEAN_PATH=".lake/build/lib/lean:." lake env lean Test/EmbedCrossModuleUse.lean
 ``` -/
 
-#theorem le_trans_script (a b c : Nat) (hab : a ≤ b) (hbc : b ≤ c) : a ≤ c := script
-  apply_thm Nat.le_trans
-  apply_h hab
-  apply_h hbc
+@theorem le_trans_script (a b c : Nat) (hab : a ≤ b) (hbc : b ≤ c) : a ≤ c := script
+  apply (Nat.le_trans hab)
+  assumption

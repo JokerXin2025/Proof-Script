@@ -1,7 +1,15 @@
 import ProofScript
 
-open ProofScript.Extension
+@text "==== Level 4"
 
-#guard (ProofText.parse "==== Level 4").isOk
-#guard !(ProofText.parse "===== Level 5").isOk
-#guard !(ProofText.parse "====== Level 6").isOk
+/--
+error: invalid heading or heading label; labels must match [A-Za-z][A-Za-z0-9_-]*
+-/
+#guard_msgs (error) in
+@text "===== Level 5"
+
+/--
+error: invalid heading or heading label; labels must match [A-Za-z][A-Za-z0-9_-]*
+-/
+#guard_msgs (error) in
+@text "====== Level 6"

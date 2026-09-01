@@ -1,6 +1,6 @@
 import ProofScript
 
-#text r#"
+@text r#"
 = ProofText Overview <overview>
 
 This paragraph contains *bold*, _italic_, *_bold italic_*, ~~deleted~~,
@@ -27,16 +27,16 @@ theorem example : True := by
 ```
 "#
 
-#theorem @[theorem_info (name := "Paper Main", label := "paper-main")]
+@theorem @[theorem_info (name := "Paper Main", label := "paper-main")]
   paperMain (P : Prop) (h : P) : P := script
-  apply_h h
+  assumption
 
-#theorem defaultDisplayName : True := script
+@theorem defaultDisplayName : True := script
   trivial
 
-#theorem @[theorem_info (name := "Incomplete Result")] incompleteResult : True := script
+@theorem @[theorem_info (name := "Incomplete Result")] incompleteResult : True := script
   cause "pending"
 
-#page_end
+page_end
 
-#text "This component is intentionally ignored after export."
+@text "This component is intentionally ignored after export."

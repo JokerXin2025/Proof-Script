@@ -1,10 +1,56 @@
 import ProofScript.Extension.Component.Core
 
+open Lean
 open ProofScript.Extension
 
 
-namespace ProofScript.Extension.ProofText
+private inductive ProofTextReferenceKind where
+| heading
+| theorem
+| figure
+deriving Inhabited, Repr, BEq, Hashable, ToJson, FromJson
 
+private inductive Inline where
+| text (value : String)
+| strong (content : Array Inline)
+| emphasis (content : Array Inline)
+| strongEmphasis (content : Array Inline)
+| code (value : String)
+| strike (content : Array Inline)
+| underline (content : Array Inline)
+| highlight (content : Array Inline)
+| superscript (content : Array Inline)
+| subscript (content : Array Inline)
+| link (content : Array Inline) (url : String)
+| reference (kind : ProofTextReferenceKind) (label : String)
+| math (latex : String)
+| softBreak
+| hardBreak
+deriving Inhabited, Repr, ToJson, FromJson
+
+mutual
+
+  private inductive Block where
+  | paragraph (content : Array Inline)
+  | heading (level : Nat) (label : Option String) (content : Array Inline)
+  | code (language : Option String) (source : String)
+  | orderedList (start : Nat) (items : Array ListItem)
+  | unorderedList (items : Array ListItem)
+  | quote (content : Array Block)
+  | displayMath (latex : String)
+  deriving Inhabited, Repr, ToJson, FromJson
+
+  private structure ListItem where
+    ordinal : Option Nat := none
+    content : Array Block
+  deriving Inhabited, Repr, ToJson, FromJson
+
+end
+
+private structure TextComponent where
+  source : String
+  blocks : Array Block
+deriving Inhabited, Repr, ToJson, FromJson
 
 private def validLabel (label : String) : Bool :=
   match label.toList with
@@ -27,7 +73,9 @@ private def findFrom (text needle : String) (start : Nat) : Option Nat :=
 
 private partial def parseInlineCore (text : String)
                                     : Except String (Array Inline) := do
-  let rec loop (rest : String) (out : Array Inline) : Except String (Array Inline) := do
+  let rec loop  (rest : String)
+                (out : Array Inline)
+                : Except String (Array Inline) := do
     if rest.isEmpty then return out
     if rest.startsWith "\\" then
       let escaped := rest.drop 1 |>.toString
@@ -83,9 +131,9 @@ private partial def parseInlineCore (text : String)
       unless validLabel label do throw s!"invalid heading label '{label}'"
       loop (rest.drop (closeAt + 1) |>.toString) (out.push (.reference .heading label))
     else if rest.startsWith "@thm:" || rest.startsWith "@fig:" then
-      let (marker, kind) : String × ReferenceKind :=
-        if rest.startsWith "@thm:" then ("@thm:", ReferenceKind.theorem)
-        else ("@fig:", ReferenceKind.figure)
+      let (marker, kind) : String × ProofTextReferenceKind :=
+        if rest.startsWith "@thm:" then ("@thm:", ProofTextReferenceKind.theorem)
+        else ("@fig:", ProofTextReferenceKind.figure)
       let tail := rest.drop marker.length |>.toString
       let label := String.ofList <| tail.toList.takeWhile fun c =>
         c.isAlphanum || c == '-' || c == '_'
@@ -95,7 +143,7 @@ private partial def parseInlineCore (text : String)
       loop (rest.drop 1 |>.toString) (appendText out (rest.take 1 |>.toString))
   loop text #[]
 
-def parseInline (text : String) : Except String (Array Inline) :=
+private def parseInline (text : String) : Except String (Array Inline) :=
   parseInlineCore text
 
 private def stripIndent (source : String) : String :=
@@ -137,7 +185,7 @@ private def startsBlock (line : String) : Bool :=
   line.startsWith "```" || line == "$$" || line.startsWith "- " || line.startsWith "+ " ||
     line.startsWith "> " || (headingLine? line).isSome || (orderedItem? line).isSome
 
-partial def parse (rawSource : String) : Except String (Array Block) := do
+private partial def parse (rawSource : String) : Except String (Array Block) := do
   let source := stripIndent rawSource
   let lines := source.splitOn "\n" |>.toArray
   let rec loop (index : Nat) (out : Array Block) : Except String (Array Block) := do
@@ -214,10 +262,6 @@ partial def parse (rawSource : String) : Except String (Array Block) := do
     loop next (out.push (.paragraph content))
   loop 0 #[]
 
-
-end ProofScript.Extension.ProofText
-
-
 private partial def headingLabels (blocks : Array Block) : Array String := Id.run do
   let mut labels := #[]
   for block in blocks do
@@ -229,10 +273,10 @@ private partial def headingLabels (blocks : Array Block) : Array String := Id.ru
     | _ => pure ()
   return labels
 
-elab "#text" source:str : command => do
+elab "@""text" source:str : command => do
   let raw := source.getString
-  let blocks ←  match ProofText.parse raw with
+  let blocks ←  match parse raw with
                 | .ok blocks => pure blocks
                 | .error message => throwErrorAt source message
-  let labels := (headingLabels blocks).map fun label => (.heading, label)
-  addPageComponent source.raw (.text { source := raw, blocks }) labels
+  let labels := (headingLabels blocks).map fun label => ("heading", label)
+  addPageComponent source.raw "text" (toJson ({ source := raw, blocks } : TextComponent)) labels

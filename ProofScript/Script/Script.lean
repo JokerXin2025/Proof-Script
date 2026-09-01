@@ -114,16 +114,27 @@ def scriptTacticName (name : String) : String := "script_" ++ name
 
 def recordingTacticName (name : String) : String := "_" ++ scriptTacticName name
 
+def scriptTacticBaseName? (name : String) : Option String :=
+  if name.startsWith "script_" then some (name.drop 7 |>.toString) else none
+
 /-- Select the registered parser candidate without descending into tactic arguments. -/
 def registeredTacticCall (registrations : List ScriptTacticRegistration) (name : String)
     (t : Syntax) : Option (ScriptTacticRegistration × Syntax) :=
-  if t.getKind == `choice then
+  let matching := registrations.filter (·.name == name)
+  let exact := if t.getKind == `choice then
     t.getArgs.findSome? fun candidate =>
       registrations.find? (fun r => r.name == name && r.sourceKind == candidate.getKind)
         |>.map (·, candidate)
   else
     registrations.find? (fun r => r.name == name && r.sourceKind == t.getKind)
       |>.map (·, t)
+  exact <|> match matching with
+    | [registration] =>
+        if t.getKind == `choice then
+          t.getArgs.findSome? fun candidate =>
+            if firstAtomName candidate == some name then some (registration, candidate) else none
+        else some (registration, t)
+    | _ => none
 
 /-- Rewrite only a tactic call's root kind and direct keyword token. All parameter syntax is reused. -/
 def rewriteTacticCall (call : Syntax) (sourceName targetName : String)
@@ -158,8 +169,8 @@ def collectFollowingStrategyCases (stmts : Array Syntax) (start : Nat) : List St
 
 /-- Hint mapping table for Lean native tactics -/
 def nativeHintMap : List (String × String) := [
-  ("apply", "Use `apply_h` or `apply_thm` instead of `apply`."),
-  ("exact", "Use `provide` instead of `exact`."),
+  ("apply", "Use `apply` with a proposition of the form `P -> Q` or `P <-> Q`."),
+  ("exact", "Use `provide` only for existential witnesses; it is not a general `exact`."),
   ("intro", "Use `intro_h` or `by_contra` instead of `intro`."),
   ("rw", "Use `rewrite` instead of `rw`."),
   ("rfl", "Use `trivial` instead of `rfl`."),
@@ -181,7 +192,7 @@ def nativeHintMap : List (String × String) := [
   ("field", "Use `field` — it is allowed in `script` blocks."),
   ("field_simp", "Use `field` instead of `field_simp`."),
   ("have", "Use a subgoal block instead of `have`."),
-  ("refine", "Use `provide` or `apply_h` instead of `refine`."),
+  ("refine", "Use `provide` or `apply` instead of `refine`."),
   ("rcases", "Use `cases_on` or `obtain_exist` instead of `rcases`."),
   ("obtain", "Use `obtain` — it is allowed in `script` blocks."),
   ("by_cases", "Use `cases_on` — it is allowed in `script` blocks."),
@@ -200,7 +211,7 @@ elab "run_script_step" name:ident call:tactic : tactic => do
       registration.executionKind with
     | .ok rewritten => pure rewritten
     | .error message => withRef call (throwError message)
-  evalTactic (⟨rewritten⟩ : TSyntax `tactic)
+  withScriptMode <| evalTactic (⟨rewritten⟩ : TSyntax `tactic)
 
 /-! ## `:= script` Syntax -/
 
@@ -238,7 +249,7 @@ macro "script" stmts:scriptStmts : term => do
   let seq := ⟨buildTacticSeq checked⟩
   `(by $seq:tacticSeq)
 
-/-! ## `#theorem` Syntax -/
+/-! ## `#theorem` / `#lemma` Syntax -/
 
 /-! ## 录制版代码生成（语法级）
 1. 普通 tactic 与 `case` 分支内的 tactic 切换到注册的录制入口；
@@ -390,63 +401,124 @@ elab_rules : tactic
       let tag ← currentBoxTag.get
       mergeStrategyBoxes tag name.getString (nodes.getString.splitOn "\n")
 
-syntax "#theorem" ("@[" sepBy1(Lean.Parser.Term.attrInstance, ", ") "]")?
+syntax declarationKind := "@theorem" <|> "@lemma"
+syntax declarationKind ("@[" sepBy1(Lean.Parser.Term.attrInstance, ", ") "]")?
   ident (bracketedBinder)* ":" term ":=" "script" scriptStmts : command
+syntax declarationKind ("@[" sepBy1(Lean.Parser.Term.attrInstance, ", ") "]")?
+  ident (bracketedBinder)* ":" term ":=" "by " Lean.Parser.Tactic.tacticSeqIndentGt : command
+
+private inductive RecordedDeclarationKind where
+  | theorem
+  | lemma
+
+private partial def syntaxContainsAtom (value : String) (stx : Syntax) : Bool :=
+  (stx.isAtom && stx.getAtomVal == value) || stx.getArgs.any (syntaxContainsAtom value)
+
+private def declarationKindOfSyntax (stx : Syntax) : RecordedDeclarationKind :=
+  if syntaxContainsAtom "@lemma" stx then .lemma else .theorem
+
+private partial def findScriptTacticAtom? (stx : Syntax) : Option Syntax :=
+  if stx.isAtom then
+    let value := stx.getAtomVal
+    if value.startsWith "script_" || value.startsWith "_script_" then some stx else none
+  else
+    stx.getArgs.findSome? findScriptTacticAtom?
+
+private def mkDeclarationComponent (kind : RecordedDeclarationKind)
+    (data : Extension.DeclarationComponent) : Extension.ComponentData :=
+  match kind with
+  | .theorem => .theorem data
+  | .lemma => .lemma data
 
 open Lean.Elab.Command in
-/-- `#theorem` 命令 elaborator：1) 重置录制状态 2) 校验策略名 3) 插入录制代码 4) 编译为 def 5) 导出 JSON。 -/
+private def addRecordedDeclaration (kind : RecordedDeclarationKind)
+    (name : TSyntax `ident) (declName : Name) (proofPath : System.FilePath) : CommandElabM Unit := do
+  let location : Extension.SourceLocation := {
+    file := ← getFileName
+    start := (name.raw.getPos?.getD 0).byteIdx
+    stop := (name.raw.getTailPos?.getD (name.raw.getPos?.getD 0)).byteIdx
+  }
+  let env ← getEnv
+  let sorryAx := (← Lean.collectAxioms declName).contains ``sorryAx
+  let data : Extension.DeclarationComponent := {
+    declName := declName
+    name := name.getId.toString
+    label := none
+    proof := proofPath.toString
+    sorryAx := sorryAx
+  }
+  let component : Extension.Component := {
+    source := location
+    data := mkDeclarationComponent kind data
+  }
+  let (nextEnv, added) ← match Extension.addComponent env component with
+    | .ok result => pure result
+    | .error message => throwErrorAt name message
+  unless added do
+    logWarningAt name "page component appears after page_end and was ignored"
+  setEnv nextEnv
+
+open Lean.Elab.Command in
+private def collectDeclarationReferences (declName : Name) : CommandElabM Unit := do
+  unless ← referencesEnabled do return
+  let env ← getEnv
+  let some value := (env.find? declName).bind (·.value? (allowOpaque := true))
+    | return
+  for constant in value.getUsedConstants do
+    if let some info := findTheoremInfo env constant then
+      liftIO <| addTheoremRef { name := constant, info := info }
+
+open Lean.Elab.Command in
+/-- `#theorem`/`#lemma := script` validates and records each script step. -/
 elab_rules : command
 | `(command|
-    #theorem $[@[$attrs:attrInstance,*]]? $name:ident $[$bs:bracketedBinder]* : $type:term
-    := script $stmts:scriptStmts
+    $kind:declarationKind $[@[$attrs:attrInstance,*]]? $name:ident
+      $[$bs:bracketedBinder]* : $type:term := script $stmts:scriptStmts
   ) => do
-    let thmName := name.getId.toString
+    let kind := declarationKindOfSyntax kind.raw
+    let declarationName := name.getId.toString
     let declName := (← getCurrNamespace) ++ name.getId
     let commandStx ← getRef
     let code := String.Pos.Raw.extract (← getFileMap).source
       (commandStx.getPos?.getD 0) (commandStx.getTailPos?.getD (commandStx.getPos?.getD 0))
     resetScriptState
-    pushBoxTag thmName
-    -- 语法级录制变换（替代 reprint + prependRecordIO 字符串往返）
+    resetExprJsonState
+    pushBoxTag declarationName
     let tactics ← collectRecordTactics (scriptStmtsToArray stmts)
-    -- 组装 def：签名（name/bs/type）与 tactic 体都走 antiquotation，全程保留源码位置
-    -- （Hover/Go-to-def 正常）。`by $seq:tacticSeq` 与 `:= script` 的 term 宏同款，避免
-    -- reprint → reparse：reprint 会把 `infer` 这类缩进敏感多行 term（ppLine/colGe）压成单行，
-    -- reparse 时步骤分隔符丢失而报 `[#theorem] parse: expected end of input`。
     let seq : TSyntax ``tacticSeq := ⟨buildTacticSeq tactics⟩
     let defCmd ← `(command|
       $[@[$attrs,*]]? def $name $[$bs]* : $type := by $seq:tacticSeq
     )
     elabCommand defCmd
-    -- 关键修复：把 def 的 declaration range 显式存回 LSP（否则 IDE 不显示蓝勾）。
-    -- `rangeStx` = 整个 #theorem 命令；`selectionRangeStx` = 定理名（hover / go-to-def 定位）。
     Lean.Elab.addDeclarationRangesFromSyntax declName (← getRef) name.raw
-    -- 注册原始脚本到 ScriptDB（存 type 语法 + 未变换的 scriptStmt+ 语法），供 `embed` 重放。
-    -- 放在 elabCommand 之后，保证定理已在环境里（`MapDeclarationExtension.insert` 要求当前模块内声明）。
-    modifyEnv fun env => registerScript env declName type.raw (scriptStmtsToArray stmts)
     let moduleName ← getMainModule
     let proofPath := Extension.proofOutputPath moduleName declName
-    liftCoreM <| exportBoxToFile (Name.mkSimple thmName) proofPath code
-    let location : Extension.SourceLocation := {
-      file := ← getFileName
-      start := (name.raw.getPos?.getD 0).byteIdx
-      stop := (name.raw.getTailPos?.getD (name.raw.getPos?.getD 0)).byteIdx
-    }
-    let env ← getEnv
-    let sorryAx := (← Lean.collectAxioms declName).contains ``sorryAx
-    let component : Extension.Component := {
-      source := location
-      data := .theorem {
-        declName := declName
-        name := thmName
-        label := none
-        proof := proofPath.toString
-        sorryAx := sorryAx
-      }
-    }
-    let (nextEnv, added) ← match Extension.addComponent env component with
-      | .ok result => pure result
-      | .error message => throwErrorAt name message
-    unless added do
-      logWarningAt name "page component appears after #page_end and was ignored"
-    setEnv nextEnv
+    let expressions ← getExprJsonTable
+    liftCoreM <| exportBoxToFile (Name.mkSimple declarationName) proofPath code expressions
+    modifyEnv fun env => registerScriptArtifact env declName proofPath
+    addRecordedDeclaration kind name declName proofPath
+
+open Lean.Elab.Command in
+/-- `#theorem`/`#lemma := by` accepts arbitrary Lean tactics and exports source only. -/
+elab_rules : command
+| `(command|
+    $kind:declarationKind $[@[$attrs:attrInstance,*]]? $name:ident
+      $[$bs:bracketedBinder]* : $type:term := by $seq:tacticSeq
+  ) => do
+    let kind := declarationKindOfSyntax kind.raw
+    let declName := (← getCurrNamespace) ++ name.getId
+    if let some tacticName := findScriptTacticAtom? seq.raw then
+      throwErrorAt tacticName "`:= by` cannot use Proof-Script tactics; use ordinary Lean tactics"
+    let commandStx ← getRef
+    let code := String.Pos.Raw.extract (← getFileMap).source
+      (commandStx.getPos?.getD 0) (commandStx.getTailPos?.getD (commandStx.getPos?.getD 0))
+    let defCmd ← `(command|
+      $[@[$attrs,*]]? def $name $[$bs]* : $type := by $seq:tacticSeq
+    )
+    elabCommand defCmd
+    Lean.Elab.addDeclarationRangesFromSyntax declName (← getRef) name.raw
+    collectDeclarationReferences declName
+    let moduleName ← getMainModule
+    let proofPath := Extension.proofOutputPath moduleName declName
+    liftCoreM <| exportCodeOnlyProofToFile proofPath code
+    addRecordedDeclaration kind name declName proofPath

@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://proof-script.local/schema/page-0.2.0.json",
+  "$id": "https://proof-script.local/schema/page-0.3.0.json",
   "title": "Proof-Script Page JSON",
   "type": "object",
   "required": ["schemaVersion", "ProjectInfo", "module", "source", "components"],
   "properties": {
-    "schemaVersion": { "const": "0.2.0" },
+    "schemaVersion": { "const": "0.3.0" },
     "ProjectInfo": { "$ref": "#/$defs/projectInfo" },
     "module": { "type": "string", "minLength": 1 },
     "source": { "type": "string", "minLength": 1 },
@@ -86,6 +86,25 @@
       },
       "additionalProperties": false
     },
+    "resourceRef": {
+      "type": "object",
+      "required": ["$resource"],
+      "properties": {
+        "$resource": {
+          "type": "object",
+          "required": ["path", "hash", "mediaType", "encoding"],
+          "properties": {
+            "path": { "type": "string", "minLength": 1 },
+            "hash": { "type": "string", "minLength": 1 },
+            "mediaType": { "type": "string", "minLength": 1 },
+            "encoding": { "enum": ["utf-8", "binary"] },
+            "byteSize": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "latexComponent": {
       "type": "object",
       "required": ["metadata", "language", "source", "svg"],
@@ -93,7 +112,7 @@
         "metadata": { "$ref": "#/$defs/metadata" },
         "language": { "const": "latex" },
         "source": { "type": "string" },
-        "svg": { "type": "string" }
+        "svg": { "$ref": "#/$defs/resourceRef" }
       },
       "additionalProperties": false
     },
@@ -104,6 +123,67 @@
         "metadata": { "$ref": "#/$defs/metadata" },
         "path": { "type": "string", "minLength": 1 },
         "extension": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "computationFunction": {
+      "type": "object",
+      "required": ["declaration", "type", "expression", "implementation", "expressions"],
+      "properties": {
+        "declaration": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "expression": true,
+        "implementation": true,
+        "expressions": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "pendingComputationExecution": {
+      "type": "object",
+      "required": ["backend", "status", "abi", "bundleId", "entry", "wrapper", "manifest"],
+      "properties": {
+        "backend": { "const": "wasm" },
+        "status": { "const": "pending" },
+        "abi": { "const": "proof-script-json-v1" },
+        "bundleId": { "type": "string", "minLength": 1 },
+        "entry": { "type": "string", "minLength": 1 },
+        "wrapper": { "type": "string", "minLength": 1 },
+        "manifest": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "readyComputationExecution": {
+      "type": "object",
+      "required": ["backend", "status", "abi", "bundleId", "entry", "wrapper", "manifest", "module", "wasm"],
+      "properties": {
+        "backend": { "const": "wasm" },
+        "status": { "const": "ready" },
+        "abi": { "const": "proof-script-json-v1" },
+        "bundleId": { "type": "string", "minLength": 1 },
+        "entry": { "type": "string", "minLength": 1 },
+        "wrapper": { "type": "string", "minLength": 1 },
+        "manifest": { "$ref": "#/$defs/resourceRef" },
+        "module": { "$ref": "#/$defs/resourceRef" },
+        "wasm": { "$ref": "#/$defs/resourceRef" }
+      },
+      "additionalProperties": false
+    },
+    "computationExecution": {
+      "oneOf": [
+        { "$ref": "#/$defs/pendingComputationExecution" },
+        { "$ref": "#/$defs/readyComputationExecution" }
+      ]
+    },
+    "computationComponent": {
+      "type": "object",
+      "required": ["schemaVersion", "metadata", "renderer", "function", "execution", "payload"],
+      "properties": {
+        "schemaVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "metadata": { "$ref": "#/$defs/metadata" },
+        "renderer": { "type": "string", "minLength": 1 },
+        "function": { "$ref": "#/$defs/computationFunction" },
+        "execution": { "$ref": "#/$defs/computationExecution" },
+        "payload": true
       },
       "additionalProperties": false
     },
@@ -249,7 +329,7 @@
       },
       "additionalProperties": false
     },
-    "theoremValue": {
+    "declarationValue": {
       "type": "object",
       "required": ["name", "label", "proof", "sorryAx"],
       "properties": {
@@ -272,11 +352,13 @@
     "componentData": {
       "oneOf": [
         { "type": "object", "required": ["text"], "properties": { "text": { "type": "object", "required": ["value"], "properties": { "value": { "$ref": "#/$defs/textValue" } }, "additionalProperties": false } }, "additionalProperties": false },
-        { "type": "object", "required": ["theorem"], "properties": { "theorem": { "type": "object", "required": ["value"], "properties": { "value": { "$ref": "#/$defs/theoremValue" } }, "additionalProperties": false } }, "additionalProperties": false },
+        { "type": "object", "required": ["theorem"], "properties": { "theorem": { "type": "object", "required": ["value"], "properties": { "value": { "$ref": "#/$defs/declarationValue" } }, "additionalProperties": false } }, "additionalProperties": false },
+        { "type": "object", "required": ["lemma"], "properties": { "lemma": { "type": "object", "required": ["value"], "properties": { "value": { "$ref": "#/$defs/declarationValue" } }, "additionalProperties": false } }, "additionalProperties": false },
         { "type": "object", "required": ["latex"], "properties": { "latex": { "type": "object", "required": ["value"], "properties": { "value": { "$ref": "#/$defs/latexComponent" } }, "additionalProperties": false } }, "additionalProperties": false },
         { "type": "object", "required": ["figure"], "properties": { "figure": { "type": "object", "required": ["value"], "properties": { "value": { "$ref": "#/$defs/figureComponent" } }, "additionalProperties": false } }, "additionalProperties": false },
+        { "type": "object", "required": ["computation"], "properties": { "computation": { "type": "object", "required": ["value"], "properties": { "value": { "$ref": "#/$defs/computationComponent" } }, "additionalProperties": false } }, "additionalProperties": false },
         { "type": "object", "required": ["references"], "properties": { "references": { "type": "object", "required": ["value"], "properties": { "value": { "type": "array", "items": { "$ref": "#/$defs/referenceValue" } } }, "additionalProperties": false } }, "additionalProperties": false },
-        { "type": "object", "required": ["custom"], "properties": { "custom": { "type": "object", "required": ["kind", "value"], "properties": { "kind": { "type": "string" }, "value": true }, "additionalProperties": false } }, "additionalProperties": false }
+        { "type": "object", "minProperties": 1, "maxProperties": 1, "propertyNames": { "not": { "enum": ["text", "theorem", "lemma", "latex", "figure", "computation", "references"] } }, "additionalProperties": { "type": "object", "required": ["value"], "properties": { "value": true }, "additionalProperties": false } }
       ]
     },
     "component": {

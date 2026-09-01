@@ -2,16 +2,23 @@
 
 This document specifies the public JSON formats emitted by Proof-Script.
 
+The downstream renderer migration checklist is available in
+[`Renderer-Migration-0.3.0-zh.md`](Renderer-Migration-0.3.0-zh.md).
+
 The machine-readable JSON Schema files are:
 
 - `docs/schema/page.schema.json`
 - `docs/schema/proof.schema.json`
+- `docs/schema/computation-pending.schema.json`
+- `docs/schema/computation-bundle.schema.json`
+- `docs/schema/computation-published-bundle.schema.json`
+- `docs/schema/computation-index.schema.json`
 
 Both schemas use JSON Schema Draft 2020-12.
 
 ## 1. Versioning
 
-The current schema version is `0.2.0`.
+The current schema version is `0.3.0`.
 
 Page JSON and proof-tree JSON both embed the version in their top-level `schemaVersion` field.
 
@@ -38,7 +45,7 @@ For Lean module `Paper.Chapter.Main`, the page file is:
 
 ```json
 {
-  "schemaVersion": "0.2.0",
+  "schemaVersion": "0.3.0",
   "ProjectInfo": {},
   "module": "Paper.Chapter.Main",
   "source": "/project/Paper/Chapter/Main.lean",
@@ -88,10 +95,17 @@ Current tags:
 
 - `text`
 - `theorem`
+- `lemma`
 - `latex`
 - `figure`
 - `references`
-- `custom` (reserved; no public registration command yet)
+- `computation`
+
+The component envelope is open: modules may define additional tags without changing Proof-Script's
+page model. A custom command serializes its component-specific value and calls
+`ProofScript.Extension.addPageComponent` with the tag, JSON value, and optional labels. Only the
+`theorem` and `lemma` components are handled specially by the page exporter so their declaration
+metadata can be resolved at `#page_end`.
 
 ### 2.5 Text component
 
@@ -136,7 +150,7 @@ Block tags currently include:
 - `quote`
 - `displayMath`
 
-### 2.6 Theorem component
+### 2.6 Theorem and lemma components
 
 ```json
 {
@@ -151,10 +165,25 @@ Block tags currently include:
 }
 ```
 
+A declaration introduced with `#lemma` has the same value shape but uses a distinct component tag:
+
+```json
+{
+  "lemma": {
+    "value": {
+      "name": "Supporting lemma",
+      "label": null,
+      "proof": ".Proof-Script/proofs/Paper/Main/supportingLemma.json",
+      "sorryAx": false
+    }
+  }
+}
+```
+
 `name` is the display name from `theorem_info`; when omitted it defaults to the Lean declaration's
 unqualified name. `label` is nullable. `proof` is the path to the independent proof-tree JSON file.
 `sorryAx` is true when the declaration transitively uses Lean's `sorryAx`. The page does not embed
-the proof tree.
+the proof document. Both `#theorem` and `#lemma` support `:= script` and unrestricted `:= by`.
 
 ### 2.7 LaTeX and figure components
 
@@ -169,13 +198,22 @@ the proof tree.
       },
       "language": "latex",
       "source": "\\begin{tikzpicture}...",
-      "svg": "<svg ...>...</svg>"
+      "svg": {
+        "$resource": {
+          "path": ".Proof-Script/resources/svg/123.svg",
+          "hash": "123",
+          "mediaType": "image/svg+xml",
+          "encoding": "utf-8"
+        }
+      }
     }
   }
 }
 ```
 
-`#latex` accepts arbitrary LaTeX source, compiles it to SVG, and emits the `latex` tag above.
+`#latex` accepts arbitrary LaTeX source and compiles it to SVG. The complete SVG is stored in the
+referenced UTF-8 resource file. Its content hash enables integrity checks and identical SVG values
+share one resource file; no SVG information is discarded.
 
 `#figure` accepts a relative image resource path:
 
@@ -198,7 +236,105 @@ the proof tree.
 Both component kinds use the `figure` reference namespace. Figure paths must be relative and include
 a file extension. Proof-Script records the path and extension but does not copy or read the image.
 
-### 2.8 References component
+### 2.8 Computation component
+
+`@computation` connects a Lean function declaration to a versioned downstream renderer manifest.
+All arguments are enclosed in one configuration object:
+
+```lean
+@computation {
+  metadata := (title := "Explorer"),
+  renderer := "example/table-v1",
+  function := Paper.compute,
+  payload := r#"{"execution":{"backend":"table"}}"#}
+```
+
+```json
+{
+  "computation": {
+    "value": {
+      "schemaVersion": "1.1.0",
+      "metadata": {"title": "Explorer", "label": "explorer", "extra": []},
+      "renderer": "example/table-v1",
+      "function": {
+        "declaration": "Paper.compute",
+        "type": "Bool → Nat",
+        "expression": {"$ref": "e0"},
+        "implementation": {"$ref": "e4"},
+        "expressions": {"e0": {"kind": "const", "name": "Paper.compute"}}
+      },
+      "execution": {
+        "backend": "wasm",
+        "status": "pending",
+        "abi": "proof-script-json-v1",
+        "bundleId": "Paper.Main",
+        "entry": "Paper.compute",
+        "wrapper": "Paper.__proofScript_compute",
+        "manifest": ".Proof-Script/computations/pending/Paper/Main/Paper/compute.json"
+      },
+      "payload": {"execution": {"backend": "table"}}
+    }
+  }
+}
+```
+
+`expression` identifies the declaration and `implementation` points to its elaborated function body
+in the shared, self-contained expression table. This compiler-produced intermediate artifact is
+declaration provenance and suitable for analysis, but is not a stable executable Lean IR. The
+renderer chooses and validates an execution backend from its own versioned payload contract. See
+`Embedded-Computation-Renderer-zh.md`.
+
+During Lean elaboration, `#computation` validates a single-argument pure function, synthesizes
+`FromJson`/`ToJson`, creates a `String → String` wrapper using `proof-script-json-v1`, and writes the
+pending manifest referenced by `execution.manifest`. Both `α → β` and
+`α → Except String β` are accepted; the former is lifted through `Except.ok`. The pending status is
+replaced by a Wasm resource only in the later bundling/finalization stage.
+
+Pending entry manifests are written below:
+
+```text
+.Proof-Script/computations/pending/<module path>/<declaration path>.json
+```
+
+They contain the stable module bundle ID, original declaration, generated wrapper, ABI, source
+location, pretty-printed input/output types, and `pure`/`except` error mode. Renderer configuration
+remains in the page component because multiple visualizations may share one compiled entry.
+
+### 2.10 Computation bundle
+
+The stage 4 bundler scans pending manifests, groups entries by `bundleId`, verifies each generated
+wrapper is present in the module C IR, and emits one multi-entry Wasm module per group below:
+
+```text
+.Proof-Script/computations/bundles/<bundleId>/bundle.{mjs,wasm,json}
+```
+
+`bundle.json` follows `docs/schema/computation-bundle.schema.json`. It records sorted entry IDs,
+wrapper declarations, linked C modules, artifact paths, byte size, SHA-256, and the generic
+unknown-entry smoke-test result. Bundles currently use `module-local` linking: the computation
+support module and the declaring module are linked, while project-level dependency closure and
+content-addressed publication are deferred to later stages.
+
+### 2.11 Finalized computation resources
+
+`scripts/finalize-computations.mjs` validates pending entries against built bundles and publishes
+each module/wasm pair into a content-addressed directory:
+
+```text
+.Proof-Script/resources/computation/<bundleHash>/bundle.{json,mjs,wasm}
+```
+
+`bundleHash` is SHA-256 over the module bytes, a zero separator, and the Wasm bytes. Every resource
+also carries its own SHA-256 and byte size. Page execution changes from `pending` to `ready` and
+contains resource references for the published manifest, ES module, and Wasm binary. The finalizer
+writes changed pages and `.Proof-Script/computations/index.json` through temporary files followed by
+atomic rename. It rejects missing bundles, stale bundle entries, missing page components, and hash
+mismatches before changing any page.
+
+Published bundle and index formats are specified by
+`computation-published-bundle.schema.json` and `computation-index.schema.json`.
+
+### 2.9 References component
 
 The no-argument `#references` command inserts:
 
@@ -236,18 +372,35 @@ Proof trees are written below:
 
 ### 3.2 Top-level object
 
-The top level contains the schema version, complete Lean source code, and proof-step array:
+The top level contains the schema version, complete Lean source code, an expression table, and the
+proof-step array:
 
 ```json
 {
-  "schemaVersion": "0.2.0",
+  "schemaVersion": "0.3.0",
   "code": "#theorem mainTheorem : True := script\n  trivial",
+  "expressions": {
+    "e0": { "kind": "const", "name": "True", "levels": [], "isProp": true },
+    "e1": { "kind": "const", "name": "True.intro", "levels": [], "isProp": false }
+  },
   "proof": [
-    { "_goal_": {} },
-    { "_step_": "provide", "proof": {} }
+    { "_goal_": { "$ref": "e0" } },
+    { "_step_": "provide", "proof": { "$ref": "e1" } }
   ]
 }
 ```
+
+For `#theorem` or `#lemma` declarations written with `:= by`, Proof-Script accepts any Lean tactic,
+does not validate or record individual steps, and emits a code-only document:
+
+```json
+{
+  "schemaVersion": "0.3.0",
+  "code": "#lemma supportingLemma : True := by\n  trivial"
+}
+```
+
+Reference collection remains enabled for this mode and scans the elaborated proof term directly.
 
 Each item is one of the following logical forms.
 
@@ -255,8 +408,8 @@ Goal record:
 
 ```json
 {
-  "_goal_": {},
-  "prev_proof": {}
+  "_goal_": { "$ref": "e0" },
+  "prev_proof": { "$ref": "e1" }
 }
 ```
 
@@ -265,7 +418,7 @@ Step record:
 ```json
 {
   "_step_": "provide",
-  "proof": {}
+  "proof": { "$ref": "e1" }
 }
 ```
 
@@ -285,8 +438,9 @@ The exact fields of tactic steps depend on the tactic and its recorder. Consumer
 
 ### 3.3 Expression values
 
-Goals and tactic parameters may contain serialized Lean expressions. Expression objects use a
-`kind` discriminator such as:
+Goals and tactic parameters contain expression references of the form `{ "$ref": "eN" }`.
+`eN` resolves against the top-level `expressions` object. Every referenced entry must exist.
+Expression entries use a `kind` discriminator such as:
 
 - `bvar`
 - `fvar`
@@ -301,8 +455,10 @@ Goals and tactic parameters may contain serialized Lean expressions. Expression 
 - `mdata`
 - `proj`
 
-Expression objects are intentionally left extensible in `proof.schema.json`, because optional
-type information and tactic-specific wrappers change their fields.
+The table represents a directed acyclic graph. Recursive expression fields (`fn`, `arg`, `type`,
+`body`, `value`, `expr`, `typeOf`, and every `arguments[].expr`) are references rather than copied
+subtrees. Resolving all references reconstructs every field emitted by version 0.2.0 without loss.
+The IDs are local to one proof document and have no meaning outside it.
 
 Every serialized expression node includes `isProp`, computed using Lean's `Meta.isProp` for that
 exact expression. This distinguishes propositions such as `P`, proofs such as `h : P`, and data
@@ -315,7 +471,7 @@ Application nodes retain the binary `fn` and `arg` fields and additionally provi
   "headConstant": "HAdd.hAdd",
   "arguments": [
     {
-      "expr": {},
+      "expr": { "$ref": "e7" },
       "binderInfo": "instImplicit",
       "isExplicit": false,
       "isTypeclass": true
@@ -348,9 +504,41 @@ The `latex` proof tactic accepts the same metadata and arbitrary LaTeX source as
   },
   "language": "latex",
   "source": "\\begin{figure}...",
-  "svg": "<svg ...>...</svg>"
+  "svg": {
+    "$resource": {
+      "path": ".Proof-Script/resources/svg/123.svg",
+      "hash": "123",
+      "mediaType": "image/svg+xml",
+      "encoding": "utf-8"
+    }
+  }
 }
 ```
+
+### 3.5 External resources and embed
+
+Large immutable values use a resource reference:
+
+```json
+{
+  "$resource": {
+    "path": ".Proof-Script/proofs/Library/Theorem.json",
+    "hash": "123",
+    "mediaType": "application/vnd.proof-script.proof+json",
+    "encoding": "utf-8"
+  }
+}
+```
+
+Paths are relative to the project working directory. Readers must load the complete UTF-8 file and
+verify that its `hash` equals Proof-Script's string hash recorded in the reference. SVG resources
+contain the original complete SVG. An `embed` step references the original complete proof document
+instead of duplicating and replaying its proof tree; its `theorem`, `type`, `args`, `argKinds`, and
+introduced `h` fields remain in the parent step, so all former information remains available.
+
+Version 0.3.0 intentionally replaces inline expression trees and SVG strings with references. This
+is a schema migration rather than information removal: consumers obtain the same data by resolving
+`$ref` and `$resource` objects.
 
 ## 4. Compatibility Requirements
 
@@ -362,6 +550,8 @@ Writers must:
 - keep proof trees independent from page JSON;
 - use `null` for absent optional labels;
 - preserve `extra` metadata pairs in order.
+- emit every expression ID referenced by a proof record or another expression node;
+- retain complete resource contents at the referenced paths.
 
 Readers should:
 
@@ -370,10 +560,13 @@ Readers should:
 - preserve unknown proof-step fields;
 - resolve theorem `proof` paths relative to the project working directory;
 - build cross-page label indexes after loading all page files.
+- resolve `$ref` against the current proof document's `expressions` table;
+- resolve `$resource` paths relative to the project working directory and verify their hashes.
 
 ## 5. Known Schema Limitations
 
 - Lean expression serialization is described only structurally and remains extensible.
 - Source paths are currently commonly absolute.
-- Custom page components are reserved but not publicly registrable.
+- Custom page components are intentionally open and therefore do not receive component-specific
+  validation from the core schema unless promoted to a built-in tag.
 - Cross-page reference validity is checked by the future renderer, not by individual Lean modules.

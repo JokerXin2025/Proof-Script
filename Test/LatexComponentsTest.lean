@@ -1,6 +1,6 @@
 import ProofScript
 
-#latex (title := "Arbitrary LaTeX", label := "page-latex", placement := "center") r#"
+@latex (title := "Arbitrary LaTeX", label := "page-latex", placement := "center") r#"
 \begin{tikzpicture}
   \node[draw] (A) at (0,0) {$A$};
   \node[draw] (B) at (2,0) {$B$};
@@ -8,10 +8,10 @@ import ProofScript
 \end{tikzpicture}
 "#
 
-#figure (title := "Image resource", label := "page-figure", width := "wide")
+@figure (title := "Image resource", label := "page-figure", width := "wide")
   "assets/example-diagram.png"
 
-#theorem latexComponentsInProof (P : Prop) (h : P) : P := script
+@theorem latexComponentsInProof (P : Prop) (h : P) : P := script
   latex (title := "Inline TikZ", label := "inline-tikz") r#"
     \begin{tikzpicture}
       \draw[->] (0,0) -- (1,0);
@@ -30,7 +30,7 @@ import ProofScript
       \end{tabular}
     \end{table}
   "#
-  apply_h h
+  assumption
 
 example (P : Prop) (h : P) : P := script
   latex (title := "Inline TikZ") r#"
@@ -38,6 +38,6 @@ example (P : Prop) (h : P) : P := script
       \draw (0,0) circle (2pt);
     \end{tikzpicture}
   "#
-  apply_h h
+  assumption
 
-#page_end
+page_end

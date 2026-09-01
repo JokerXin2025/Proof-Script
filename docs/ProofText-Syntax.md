@@ -1,6 +1,6 @@
 # ProofText Syntax
 
-ProofText is the lightweight markup language parsed inside Proof-Script's `#text` command. It
+ProofText is the lightweight markup language parsed inside Proof-Script's `@text` command. It
 provides semantic blocks and inline markup for prose that is exported with a Lean module.
 
 ProofText resembles Typst, but it is a distinct and deliberately small language. In particular,
@@ -8,18 +8,18 @@ ProofText resembles Typst, but it is a distinct and deliberately small language.
 
 This document describes the syntax implemented by the current ProofText parser.
 
-## 1. Using `#text`
+## 1. Using `@text`
 
 The command takes exactly one Lean string literal:
 
 ```lean
-#text "A paragraph."
+@text "A paragraph."
 ```
 
 Multiline raw strings are usually the most convenient form:
 
 ````lean
-#text r#"
+@text r#"
 = Introduction <introduction>
 
 This is *important* text with $x + y$ inline.
@@ -44,7 +44,7 @@ Raw Lean strings are recommended for multiline text, LaTeX, and text containing 
 escapes. Increase the number of `#` characters around a raw string when its content contains the
 current closing sequence.
 
-Each successful `#text` command before `#page_end` adds one text component to the current page.
+Each successful `@text` command before `page_end` adds one text component to the current page.
 Components after export are ignored with a warning.
 
 ## 2. Complete Example
@@ -319,7 +319,7 @@ strings avoid this extra layer.
 One backtick pair creates verbatim inline code:
 
 ```text
-Use `provide h` to close the goal.
+Use `assumption` to close a script goal.
 ```
 
 The first later backtick closes the code span. Its body is not parsed for markup or escapes.

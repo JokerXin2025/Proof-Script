@@ -1,30 +1,33 @@
 import ProofScript.Extension.Component.Core
 
 open Lean
-open Lean.Elab.Command (CommandElabM)
+open ProofScript.Extension
 
-namespace ProofScript.Extension
 
-private def addFigureComponent (metadataStx : Syntax) (pathStx : TSyntax `str) : CommandElabM Unit := do
-  let metadata ← match parseComponentMetadata metadataStx with
-    | .ok metadata => pure metadata
-    | .error message => throwErrorAt metadataStx message
+private structure FigureComponent where
+  metadata : ComponentMetadata
+  path : String
+  extension : String
+deriving Inhabited, Repr, ToJson, FromJson
+
+open Lean.Elab.Command in
+private def addFigureComponent  (metadataStx : Syntax)
+                                (pathStx : TSyntax `str)
+                                : CommandElabM Unit := do
+  let metadata ←  match parseComponentMetadata metadataStx with
+                  | .ok metadata => pure metadata
+                  | .error message => throwErrorAt metadataStx message
   let path := pathStx.getString
   let filePath := System.FilePath.mk path
   if filePath.isAbsolute then
-    throwErrorAt pathStx "#figure requires a relative resource path"
+    throwErrorAt pathStx "@figure requires a relative resource path"
   let some extension := filePath.extension
-    | throwErrorAt pathStx "#figure resource path must include a file extension"
+    | throwErrorAt pathStx "@figure resource path must include a file extension"
   let labels := match metadata.label with
-    | some label => #[(ReferenceKind.figure, label)]
-    | none => #[]
-  addPageComponent pathStx.raw (.figure { metadata, path, extension }) labels
+                | some label => #[("figure", label)]
+                | none => #[]
+  let value : FigureComponent := { metadata, path, extension }
+  addPageComponent pathStx.raw "figure" (toJson value) labels
 
-syntax "#figure" componentMeta str : command
-
-open Lean.Elab.Command in
-elab_rules : command
-  | `(command| #figure $metadata:componentMeta $path:str) =>
-      addFigureComponent metadata.raw path
-
-end ProofScript.Extension
+elab "@""figure" metadata:componentMeta path:str : command =>
+  addFigureComponent metadata.raw path

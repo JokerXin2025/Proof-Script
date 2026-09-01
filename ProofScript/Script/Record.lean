@@ -39,38 +39,44 @@ inductive ParamRaw where
 /-- 把 `term`/`ident`/`ident+` 参数的原始语法在当前主目标上下文中 elaborate，再递归导出整棵
     表达式树（`ident+` 导出树数组）。序列化时机由调用方决定（执行前 = `clear`/`neither` 的
     前值，执行后 = `intro`/`neither` 的后值），保证 ident 解析到正确时点的 local context 里的 fvar。 -/
-def serializeParamRaw : ParamRaw → TacticM Json
-| .one raw => do
-    withMainContext <|
-      ProofScript.Expr2JSON (← withMainContext <|
-        elabTerm raw none)
-| .many raws => do
-    let arr ← raws.mapM fun raw => do
-      withMainContext <|
-        ProofScript.Expr2JSON (← withMainContext <|
-          elabTerm raw none)
-    return Json.arr arr
+structure ParamSnapshot where
+  expressions : Array Lean.Expr
+  json : Json
 
-/-- 对 `term`/`ident`/`ident+` 参数 elaborate 并采集其引用的定理信息（`recordRefsFromExpr`）。
-    用于 `recordStep`/`recordStrategy` 的 `preTerms`/`bothTerms`——这些参数正是「应用其它定理」
-    的输入项（`provide` 的 `proof`、`apply_thm` 的 `thm`、`rewrite` 的 `equation` 等）。 -/
-private def collectRefsParamRaw : ParamRaw → TacticM Unit
+private def elaborateParamRaw : ParamRaw → TacticM (Array Lean.Expr)
   | .one raw => do
-      unless ← referencesEnabled do return
-      let e ← withMainContext <| elabTerm raw none
-      recordRefsFromExpr e
-  | .many raws => raws.forM fun raw => do
-      unless ← referencesEnabled do return
-      let e ← withMainContext <| elabTerm raw none
-      recordRefsFromExpr e
+      let expression ← withMainContext <| elabTerm raw none
+      pure #[expression]
+  | .many raws => do
+      let mut expressions := #[]
+      for raw in raws do
+        expressions := expressions.push (← withMainContext <| elabTerm raw none)
+      pure expressions
 
+private def snapshotParamRaw (raw : ParamRaw) : TacticM ParamSnapshot := do
+  let expressions ← elaborateParamRaw raw
+  let json ← match expressions.size with
+    | 0 => pure (Json.arr #[])
+    | 1 => withMainContext <| Expr2JSON expressions[0]!
+    | _ => do
+        let mut values := #[]
+        for expression in expressions do
+          values := values.push (← withMainContext <| Expr2JSON expression)
+        pure (Json.arr values)
+  pure { expressions, json }
+
+private def recordSnapshotRefs (snapshot : ParamSnapshot) : TacticM Unit := do
+  for expression in snapshot.expressions do
+    recordRefsFromExpr expression
+
+def serializeParamRaw (raw : ParamRaw) : TacticM Json := do
+  return (← snapshotParamRaw raw).json
 /-- 执行**后**序列化参数（`intro` 参数与 `neither` 参数的后值）。
     若策略执行后已无主目标（如 `provide`/`rewrite` 解决了全部子目标），无法再设上下文
     elaborate，此时返回 `none`——调用方对 `neither` 参数退回到「前值」（此类参数在
     解决目标的步骤中不会被修改，前后一致）。 -/
-private def serializePostParam  (pr : ParamRaw)
-                                : TacticM (Option Json) := do
-  tryCatch (some <$> serializeParamRaw pr) (fun _ => pure none)
+private def snapshotPostParam (pr : ParamRaw) : TacticM (Option ParamSnapshot) := do
+  tryCatch (some <$> snapshotParamRaw pr) (fun _ => pure none)
 
 /-- 将上一步参数展平为 `prev_` 前缀的键值对列表。无上一步时返回空列表。 -/
 def prevFields  (prevOpt : Option (String × List (String × Json)))
@@ -91,13 +97,10 @@ def strategyPlaceholderJson (stepName : String) :=
 
 /-- 序列化 `neither` 参数为 `{"before": 前值, "after": 后值}`。
     前值在执行前已序列化（`beforeJson`）；后值在执行后序列化，若执行后已无目标则退回前值。 -/
-private def serializeBoth (beforeJson : Json)
-                          (pr : ParamRaw)
-                          : TacticM Json := do
-  let after ← match (← serializePostParam pr) with
-    | some v => pure v
-    | none => pure beforeJson
-  return Json.mkObj [("before", beforeJson), ("after", after)]
+private def serializeBoth (before : ParamSnapshot)
+                          (after : Option ParamSnapshot) : Json :=
+  Json.mkObj [("before", before.json),
+              ("after", after.map (·.json) |>.getD before.json)]
 
 /-- 录制单步策略。
 
@@ -134,20 +137,24 @@ def recordStep  (stepName : String)
   let goalObj := Json.mkObj ([("_goal_", goalJson)] ++ prevFields prevOpt)
   addtoBox boxName goalObj
   -- ② 执行前序列化（clear 参数 + neither 参数的前值）
-  let preElab ← preTerms.mapM fun (n, pr) => do return (n, ← serializeParamRaw pr)
-  let bothBefore ← bothTerms.mapM fun (n, pr) => do return (n, ← serializeParamRaw pr)
-  -- ②′ 采集引用（对 clear / neither 的输入 term 参数）
-  preTerms.forM (fun (_, pr) => collectRefsParamRaw pr)
-  bothTerms.forM (fun (_, pr) => collectRefsParamRaw pr)
+  let preElab ← preTerms.mapM fun (n, pr) => do
+    let snapshot ← snapshotParamRaw pr
+    if ← referencesEnabled then recordSnapshotRefs snapshot
+    return (n, snapshot.json)
+  let bothBefore ← bothTerms.mapM fun (n, pr) => do
+    let snapshot ← snapshotParamRaw pr
+    if ← referencesEnabled then recordSnapshotRefs snapshot
+    return (n, snapshot)
   -- ③ 执行策略本体
   action
   -- ④ 执行后序列化（intro 参数 + neither 参数的后值；执行后已无目标则跳过/退回前值）
   let postElab ← postTerms.mapM fun (n, pr) => do
-    match (← serializePostParam pr) with
-    | some v => return some (n, v)
+    match (← snapshotPostParam pr) with
+    | some snapshot => return some (n, snapshot.json)
     | none => return none
   let bothFields ← bothTerms.mapM fun (n, pr) => do
-    return (n, ← serializeBoth ((bothBefore.lookup n).getD Json.null) pr)
+    let before := (bothBefore.lookup n).getD { expressions := #[], json := Json.null }
+    return (n, serializeBoth before (← snapshotPostParam pr))
   -- ⑤ 参数记录器：内联 + clear + intro + neither（before/after），全部参数合并写入
   let fields := inlineFields ++ preElab ++ postElab.filterMap id ++ bothFields
   addtoBox boxName (paramsRecJson stepName fields)
@@ -184,22 +191,26 @@ def recordStrategy (stepName : String) (nodes : List String)
   addtoBox boxName goalObj
   addtoBox boxName (strategyPlaceholderJson stepName)
   -- ② 执行前序列化（clear 参数 + neither 参数的前值，如 `induction n` 的归纳变量）
-  let preElab ← preTerms.mapM fun (n, pr) => do return (n, ← serializeParamRaw pr)
-  let bothBefore ← bothTerms.mapM fun (n, pr) => do return (n, ← serializeParamRaw pr)
-  -- ②′ 采集引用（对 clear / neither 的输入 term 参数）
-  preTerms.forM (fun (_, pr) => collectRefsParamRaw pr)
-  bothTerms.forM (fun (_, pr) => collectRefsParamRaw pr)
+  let preElab ← preTerms.mapM fun (n, pr) => do
+    let snapshot ← snapshotParamRaw pr
+    if ← referencesEnabled then recordSnapshotRefs snapshot
+    return (n, snapshot.json)
+  let bothBefore ← bothTerms.mapM fun (n, pr) => do
+    let snapshot ← snapshotParamRaw pr
+    if ← referencesEnabled then recordSnapshotRefs snapshot
+    return (n, snapshot)
   -- ③ 启动策略分支（改变 currentBoxTag，但 info 子 box 用捕获的 `tag` 定位，不受影响）
   startStrategy tag nodes
   -- ④ 执行策略本体
   action
   -- ⑤ 执行后序列化（intro 参数 + neither 参数的后值，如 `cases_on p` 的 `h`）
   let postElab ← postTerms.mapM fun (n, pr) => do
-    match (← serializePostParam pr) with
-    | some v => return some (n, v)
+    match (← snapshotPostParam pr) with
+    | some snapshot => return some (n, snapshot.json)
     | none => return none
   let bothFields ← bothTerms.mapM fun (n, pr) => do
-    return (n, ← serializeBoth ((bothBefore.lookup n).getD Json.null) pr)
+    let before := (bothBefore.lookup n).getD { expressions := #[], json := Json.null }
+    return (n, serializeBoth before (← snapshotPostParam pr))
   -- ⑥ 参数记录器 → info 子 box
   let fields := inlineFields ++ preElab ++ postElab.filterMap id ++ bothFields
   let infoTag := tag ++ "_info"

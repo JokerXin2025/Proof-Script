@@ -1,13 +1,20 @@
 
 import ProofScript.Extension.Component.Core
+import ProofScript.Extension.Page.Path
 
 open Lean
 open Lean.Elab.Command (CommandElabM liftIO)
+open ProofScript.Extension
 
-namespace ProofScript.Extension
 
+private structure LatexComponent where
+  metadata : ComponentMetadata
+  language : String := "latex"
+  source : String
+  svg : Json
+deriving Inhabited, ToJson, FromJson
 
-def latexPreamble :=
+private def latexPreamble :=
   "\\documentclass[border=2pt,varwidth]{standalone}\n" ++
   "\\def\\pgfsysdriver{pgfsys-dvisvgm.def}\n" ++
   "\\usepackage{amsmath,amssymb,bm,mathrsfs}\n" ++
@@ -53,22 +60,19 @@ def compileLatexToSvg (source : String) : IO String := do
       throw <| IO.userError (processError "dvisvgm" dvisvgm)
     cleanSvg <$> readFile (dir / "component.svg")
 
-private def addLatexComponent (metadataStx : Syntax) (codeStx : TSyntax `str) : CommandElabM Unit := do
-  let metadata ← match parseComponentMetadata metadataStx with
-    | .ok metadata => pure metadata
-    | .error message => throwErrorAt metadataStx message
+private def addLatexComponent (metadataStx : Syntax)
+                              (codeStx : TSyntax `str)
+                              : CommandElabM Unit := do
+  let metadata ←  match parseComponentMetadata metadataStx with
+                  | .ok metadata => pure metadata
+                  | .error message => throwErrorAt metadataStx message
   let svg ← liftIO <| compileLatexToSvg codeStx.getString
+  let svg ← liftIO <| writeTextResource "svg" "svg" "image/svg+xml" svg
   let labels := match metadata.label with
-    | some label => #[(ReferenceKind.figure, label)]
-    | none => #[]
-  addPageComponent codeStx.raw (.latex { metadata, source := codeStx.getString, svg }) labels
+                | some label => #[("figure", label)]
+                | none => #[]
+  let value : LatexComponent := { metadata, source := codeStx.getString, svg }
+  addPageComponent codeStx.raw "latex" (toJson value) labels
 
-syntax "#latex" componentMeta str : command
-
-open Lean.Elab.Command in
-elab_rules : command
-  | `(command| #latex $metadata:componentMeta $code:str) =>
-      addLatexComponent metadata.raw code
-
-
-end ProofScript.Extension
+elab "@""latex" metadata:componentMeta code:str : command =>
+  addLatexComponent metadata.raw code

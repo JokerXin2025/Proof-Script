@@ -1,5 +1,5 @@
 import ProofScript
 
-#theorem exprJSONFields
+@theorem exprJSONFields
     (P : Prop) (h : P) (x : Nat) : P := script
-  apply_h h
+  assumption

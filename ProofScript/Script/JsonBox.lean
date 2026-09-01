@@ -5,7 +5,7 @@ open Lean (CoreM Name Json logWarning)
 
 namespace ProofScript
 
-def proofSchemaVersion := "0.2.0"
+def proofSchemaVersion := "0.3.0"
 
 initialize JSON_boxes : IO.Ref (Array (Name × Array Json)) ← IO.mkRef #[]
 
@@ -26,6 +26,7 @@ def addtoBox  (box : Name)
 def exportBoxToFile (boxName : Name)
                      (fileName : System.FilePath)
                      (code : String)
+                     (expressions : Json)
                      : CoreM Unit := do
   let arr ← JSON_boxes.get
   match arr.findIdx? (fun (b, _) => b == boxName) with
@@ -39,11 +40,22 @@ def exportBoxToFile (boxName : Name)
        let proofJson := Json.mkObj [
          ("schemaVersion", Json.str proofSchemaVersion),
          ("code", Json.str code),
+         ("expressions", expressions),
          ("proof", Json.arr currentData)
       ]
       IO.FS.writeFile fileName proofJson.pretty
       JSON_boxes.set (arr.set! idx (boxName, #[]))
   | none =>
     logWarning m! "[Proof-Script] Box '{boxName}' has not been initialized."
+
+/-- Export a proof document containing only its complete source code. -/
+def exportCodeOnlyProofToFile (fileName : System.FilePath) (code : String) : CoreM Unit := do
+  if let some parent := fileName.parent then
+    IO.FS.createDirAll parent
+  let proofJson := Json.mkObj [
+    ("schemaVersion", Json.str proofSchemaVersion),
+    ("code", Json.str code)
+  ]
+  IO.FS.writeFile fileName proofJson.pretty
 
 end ProofScript

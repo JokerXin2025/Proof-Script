@@ -1,4 +1,5 @@
 import Lean.Meta
+import ProofScript.Script.Core
 
 open Lean (MetaM Level Literal Expr BinderInfo MData Json Syntax)
 open Lean.Meta (inferType)
@@ -13,6 +14,24 @@ structure ExprJsonConfig where
   withFVarDetails : Bool  := true
   withSourceRanges : Bool := true
   deriving Inhabited, Repr
+
+structure ExprJsonState where
+  nodes : Array Json := #[]
+  fullCache : Std.HashMap Expr String := {}
+  compactCache : Std.HashMap Expr String := {}
+deriving Inhabited
+
+initialize exprJsonStateRef : IO.Ref ExprJsonState ← IO.mkRef {}
+
+def resetExprJsonState : IO Unit :=
+  exprJsonStateRef.set {}
+
+def getExprJsonTable : IO Json := do
+  let state ← exprJsonStateRef.get
+  return Json.mkObj <| state.nodes.toList.mapIdx fun index node => (s!"e{index}", node)
+
+private def exprRef (id : String) : Json :=
+  Json.mkObj [("$ref", Json.str id)]
 
 /-- `Nat` → `JSON` number -/
 private def natJson (num : Nat) : Json :=
@@ -127,8 +146,23 @@ mutual
 private partial def serializeNode (expr : Expr)
                                   (cfg : ExprJsonConfig)
                                   (sourceRange? : Option Syntax.Range := none)
-                                  : MetaM Json := do
+                                   : MetaM Json := do
   let expr ← Lean.instantiateMVars expr
+  let cacheable := sourceRange?.isNone && !cfg.withMData && cfg.withFVarDetails && cfg.withSourceRanges
+  if cacheable then
+    let state ← exprJsonStateRef.get
+    let cache := if cfg.withTypes then state.fullCache else state.compactCache
+    if let some id := cache.get? expr then
+      return exprRef id
+  let state ← exprJsonStateRef.get
+  let index := state.nodes.size
+  let id := s!"e{index}"
+  let state := { state with nodes := state.nodes.push Json.null }
+  let state := if cacheable then
+      if cfg.withTypes then { state with fullCache := state.fullCache.insert expr id }
+      else { state with compactCache := state.compactCache.insert expr id }
+    else state
+  exprJsonStateRef.set state
   let body ← serializeCore expr cfg sourceRange?
   let body ← match body with
     | Json.obj fields =>
@@ -155,7 +189,8 @@ private partial def serializeNode (expr : Expr)
         else pure fields
         pure (Json.obj fields)
     | other => pure other
-  return body
+  exprJsonStateRef.modify fun state => { state with nodes := state.nodes.set! index body }
+  return exprRef id
 
 /-- 对 `Expr` 的构造子逐一序列化主体字段。 -/
 private partial def serializeCore (expr : Expr)
@@ -246,13 +281,16 @@ private partial def serializeCore (expr : Expr)
     return Json.mkObj data
   | .mdata data expr =>
       let range? := sourceRangeFromMData data <|> sourceRange?
-      if cfg.withMData then
+      let data := data.erase witnessDataGoalMDataKey
+      if data.isEmpty then
+        serializeCore expr cfg range?
+      else if cfg.withMData then
         let data := [("kind", Json.str "mdata"),
                      ("data", mdataToJson data),
                      ("expr", ← serializeNode expr cfg range?)]
         return Json.mkObj data
       else
-        serializeNode expr cfg range?
+        serializeCore expr cfg range?
   | .proj typeName idx struct =>
     let data := [("kind", Json.str "proj"),
                  ("structName", Json.str typeName.getPrefix.toString),

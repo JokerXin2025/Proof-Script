@@ -1,0 +1,64 @@
+diff --git a/src/runtime/io.cpp b/src/runtime/io.cpp
+index a4cac03..60ba46f 100644
+--- a/src/runtime/io.cpp
++++ b/src/runtime/io.cpp
+@@ -1246,7 +1246,7 @@ extern "C" LEAN_EXPORT obj_res lean_io_hard_link(b_obj_arg orig, b_obj_arg link)
+ }
+ 
+ /* createTempFile : IO (Handle × FilePath) */
+-extern "C" LEAN_EXPORT obj_res lean_io_create_tempfile(lean_object * /* w */) {
++extern "C" LEAN_EXPORT obj_res lean_io_create_tempfile() {
+     char path[PATH_MAX];
+     size_t base_len = PATH_MAX;
+     int ret = uv_os_tmpdir(path, &base_len);
+@@ -1292,7 +1292,7 @@ extern "C" LEAN_EXPORT obj_res lean_io_create_tempfile(lean_object * /* w */) {
+ }
+ 
+ /* createTempDir : IO FilePath */
+-extern "C" LEAN_EXPORT obj_res lean_io_create_tempdir(lean_object * /* w */) {
++extern "C" LEAN_EXPORT obj_res lean_io_create_tempdir() {
+     char path[PATH_MAX];
+     size_t base_len = PATH_MAX;
+     int ret = uv_os_tmpdir(path, &base_len);
+diff --git a/src/runtime/uv/event_loop.cpp b/src/runtime/uv/event_loop.cpp
+index fa85439..cf73ed4 100644
+--- a/src/runtime/uv/event_loop.cpp
++++ b/src/runtime/uv/event_loop.cpp
+@@ -146,8 +146,8 @@ extern "C" LEAN_EXPORT lean_obj_res lean_uv_event_loop_configure(b_obj_arg optio
+ }
+ 
+ /* Std.Internal.UV.Loop.alive : BaseIO UInt64 */
+-extern "C" LEAN_EXPORT lean_obj_res lean_uv_event_loop_alive() {
+-    return io_result_mk_error("lean_uv_event_loop_alive is not supported");
++extern "C" LEAN_EXPORT uint8_t lean_uv_event_loop_alive() {
++    return 0;
+ }
+ 
+ #endif
+diff --git a/src/runtime/compact.cpp b/src/runtime/compact.cpp
+index 8471660..cf59ee0 100644
+--- a/src/runtime/compact.cpp
++++ b/src/runtime/compact.cpp
+@@ -746,7 +746,7 @@ extern "C" LEAN_EXPORT usize lean_compacted_region_size(usize region) {
+     return reinterpret_cast<compacted_region *>(region)->size();
+ }
+ 
+-extern "C" LEAN_EXPORT obj_res lean_compacted_region_free(usize region, object *) {
++extern "C" LEAN_EXPORT obj_res lean_compacted_region_free(usize region) {
+     delete reinterpret_cast<compacted_region *>(region);
+     return lean_io_result_mk_ok(lean_box(0));
+ }
+diff --git a/src/runtime/uv/system.cpp b/src/runtime/uv/system.cpp
+index 3ac95b6..5619340 100644
+--- a/src/runtime/uv/system.cpp
++++ b/src/runtime/uv/system.cpp
+@@ -634,7 +634,8 @@ extern "C" LEAN_EXPORT lean_obj_res lean_uv_os_get_passwd() {
+ }
+ 
+ // Std.Internal.UV.System.osGetGroup : IO (Option GroupInfo)
+-extern "C" LEAN_EXPORT lean_obj_res lean_uv_os_get_group() {
++extern "C" LEAN_EXPORT lean_obj_res lean_uv_os_get_group(uint64_t gid) {
++    (void)gid;
+     lean_always_assert(
+         false && ("Please build a version of Lean4 with libuv to invoke this.")
+     );

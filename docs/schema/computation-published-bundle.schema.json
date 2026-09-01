@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://proof-script.local/schema/computation-published-bundle-1.0.0.json",
+  "title": "Proof-Script Published Computation Bundle",
+  "type": "object",
+  "required": ["schemaVersion", "abi", "bundleId", "bundleHash", "entries", "module", "wasm"],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "abi": { "const": "proof-script-json-v1" },
+    "bundleId": { "type": "string", "minLength": 1 },
+    "bundleHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "wrapper"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "wrapper": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "module": { "$ref": "#/$defs/resource" },
+    "wasm": { "$ref": "#/$defs/resource" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "resource": {
+      "type": "object",
+      "required": ["$resource"],
+      "properties": {
+        "$resource": {
+          "type": "object",
+          "required": ["path", "hash", "mediaType", "encoding", "byteSize"],
+          "properties": {
+            "path": { "type": "string", "minLength": 1 },
+            "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "mediaType": { "type": "string", "minLength": 1 },
+            "encoding": { "enum": ["utf-8", "binary"] },
+            "byteSize": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

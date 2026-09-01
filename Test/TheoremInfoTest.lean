@@ -17,14 +17,14 @@ theorem lemma_ref (P : Prop) (h : P) : P := h
 theorem lemma_other (P : Prop) (h : P) : P := h
 
 -- 其它作者使用该定理时自动识别并加入文献暂存区
-#theorem use_ref (P : Prop) (h : P) : P := script
-  apply_thm lemma_ref
-  apply_h h
+@theorem use_ref (P : Prop) (h : P) : P := script
+  apply (lemma_ref P)
+  assumption
 
-#theorem use_two (P : Prop) (h : P) : P := script
-  apply_thm lemma_other
-  apply_h h
+@theorem use_two (P : Prop) (h : P) : P := script
+  apply (lemma_other P)
+  assumption
 
 -- 将文献暂存区中的内容导出
-#references
-#page_end
+@references
+page_end

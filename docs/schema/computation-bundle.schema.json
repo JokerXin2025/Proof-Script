@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://proof-script.local/schema/computation-bundle-1.0.0.json",
+  "title": "Proof-Script Computation Bundle",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "abi",
+    "bundleId",
+    "module",
+    "entries",
+    "linking",
+    "smokeTest",
+    "artifacts"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "abi": { "const": "proof-script-json-v1" },
+    "bundleId": { "type": "string", "minLength": 1 },
+    "module": { "type": "string", "minLength": 1 },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "wrapper"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "wrapper": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "linking": {
+      "type": "object",
+      "required": ["mode", "cModules"],
+      "properties": {
+        "mode": { "const": "module-local" },
+        "cModules": { "type": "array", "items": { "type": "string" }, "minItems": 2 }
+      },
+      "additionalProperties": false
+    },
+    "smokeTest": {
+      "type": "object",
+      "required": ["status", "case"],
+      "properties": {
+        "status": { "const": "passed" },
+        "case": { "const": "unknown-entry" }
+      },
+      "additionalProperties": false
+    },
+    "artifacts": {
+      "type": "object",
+      "required": ["module", "wasm", "wasmBytes", "wasmSha256"],
+      "properties": {
+        "module": { "type": "string", "minLength": 1 },
+        "wasm": { "type": "string", "minLength": 1 },
+        "wasmBytes": { "type": "integer", "minimum": 1 },
+        "wasmSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

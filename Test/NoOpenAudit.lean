@@ -15,13 +15,13 @@ script_macro
 script_macro
 "audit_remark" text:str : tactic => `(tactic| skip)
 
-#theorem noOpenScript (P : Prop) (h : P) : P := script
+@theorem noOpenScript (P : Prop) (h : P) : P := script
   audit_remark "no open"
   audit_provide h
 
 theorem noOpenEmbed (P : Prop) (h : P) : P := script
   embed (noOpenBase P h) as h'
-  apply_h h'
+  assumption
 
 namespace Client
 
@@ -32,19 +32,19 @@ script_elab
 "client_assumption" : tactic => do
   Lean.Elab.Tactic.evalTactic (← `(tactic| assumption))
 
-#theorem namespacedNoOpen (P : Prop) (h : P) : P := script
+@theorem namespacedNoOpen (P : Prop) (h : P) : P := script
   client_assumption
 
-#theorem noOpenBranch (P Q : Prop) (hP : P) (hQ : Q) : P ∧ Q := script
+@theorem noOpenBranch (P Q : Prop) (hP : P) (hQ : Q) : P ∧ Q := script
   split_and
-  | left => apply_h hP
-  | right => apply_h hQ
+  | left => assumption
+  | right => assumption
 
-#theorem noOpenCalc (n : Nat) : n = n := script
+@theorem noOpenCalc (n : Nat) : n = n := script
   calc
     n = n := rfl
 
-#theorem noOpenInfer (P : Prop) (hP : P) : P := script
+@theorem noOpenInfer (P : Prop) (hP : P) : P := script
   infer
     P => P := hP
 

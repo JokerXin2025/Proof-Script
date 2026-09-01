@@ -6,6 +6,9 @@ open Lean.Name (mkSimple)
 
 namespace ProofScript
 
+/- The marker identifies the witness-producing goal created by `witness`. -/
+def witnessDataGoalMDataKey : Lean.Name := `ProofScript.witnessDataGoal
+
 initialize stepCounter : IO.Ref Nat ← IO.mkRef 0
 initialize currentBoxTag : IO.Ref String ← IO.mkRef ""
 initialize boxTagStack  : IO.Ref (List String) ← IO.mkRef []

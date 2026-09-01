@@ -1,9 +1,16 @@
 import ProofScript.Extension.Page.State
 
 open Lean
-open Lean.Elab.Command (CommandElabM liftCoreM)
+
 
 namespace ProofScript.Extension
+
+
+structure ComponentMetadata where
+  title : String
+  label : Option String := none
+  extra : List (String × String) := []
+deriving Inhabited, Repr, ToJson, FromJson
 
 syntax componentMetaEntry := ident " := " str
 syntax componentMeta := "(" sepBy1(componentMetaEntry, ", ") ")"
@@ -47,10 +54,12 @@ def sourceLocation (stx : Syntax) : CoreM SourceLocation := do
     stop := (stx.getTailPos?.getD (stx.getPos?.getD 0)).byteIdx
   }
 
+open Lean.Elab.Command in
 /-- Adds component data to the current page. Custom component modules can use this
     after implementing their own syntax, validation, and JSON representation. -/
 def addPageComponent (stx : Syntax)
-                     (data : ComponentData)
+                     (kind : String)
+                     (value : Json)
                      (labels : Array (ReferenceKind × String) := #[])
                      : CommandElabM Unit := do
   let location ← liftCoreM <| sourceLocation stx
@@ -59,19 +68,22 @@ def addPageComponent (stx : Syntax)
     env ← match registerLabel env kind label location with
       | .ok nextEnv => pure nextEnv
       | .error message => throwErrorAt stx message
+  let data := ComponentData.component kind value
   let (nextEnv, added) ← match addComponent env { source := location, data } with
     | .ok result => pure result
     | .error message => throwErrorAt stx message
   unless added do
-    logWarningAt stx "page component appears after #page_end and was ignored"
+    logWarningAt stx "page component appears after page_end and was ignored"
   setEnv nextEnv
 
+open Lean.Elab.Command in
 /-- Adds an application-defined JSON component to the current page. -/
 def addCustomComponent (stx : Syntax)
                        (kind : String)
                        (value : Json)
                        (labels : Array (ReferenceKind × String) := #[])
                        : CommandElabM Unit :=
-  addPageComponent stx (.custom kind value) labels
+  addPageComponent stx kind value labels
+
 
 end ProofScript.Extension

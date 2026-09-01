@@ -9,19 +9,19 @@ project_info {
 @[theorem_info (name := "Referenced Result", label := "referenced-result")]
 theorem referencedResult (P : Prop) (h : P) : P := h
 
-#text r#"
+@text r#"
 = References Test <references-test>
 "#
 
-#theorem @[theorem_info (name := "Uses Reference", label := "uses-reference")] usesReference
+@theorem @[theorem_info (name := "Uses Reference", label := "uses-reference")] usesReference
     (P : Prop) (h : P) : P := script
-  apply_thm referencedResult
-  apply_h h
+  apply (referencedResult P)
+  assumption
 
-#references
+@references
 
-#text r#"
+@text r#"
 The references component appears before this paragraph.
 "#
 
-#page_end
+page_end

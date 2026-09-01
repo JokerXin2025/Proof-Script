@@ -8,16 +8,16 @@ import ProofScript
 `_embed` 重放时应触发 `foundStrategy` / `mergeStrategyBoxes` 路径，
 把各分支子 box 合并进被嵌入证明的 `proof` 数组。 -/
 
-#theorem conj_from_hyp (P Q : Prop) (hp : P) (hq : Q) : P ∧ Q := script
+@theorem conj_from_hyp (P Q : Prop) (hp : P) (hq : Q) : P ∧ Q := script
   split_and
-  | left => apply_h hp
-  | right => apply_h hq
+  | left => assumption
+  | right => assumption
 
-#theorem demo_strat (P Q : Prop) (hp : P) (hq : Q) : P ∧ Q := script
+@theorem demo_strat (P Q : Prop) (hp : P) (hq : Q) : P ∧ Q := script
   embed (conj_from_hyp P Q hp hq) as h
-  apply_h h
+  assumption
 
 /- 期望：demo_strat.json 的 embed 步骤 `proof` 数组为
    `['_goal_', 'split_and']`，其中 `split_and` 步骤含 `name`/`left`/`right` 字段，
-   `left`/`right` 各自为 `['_goal_', 'apply_h']`。 -/
+   `left`/`right` each contain `['_goal_', 'assumption']`. -/
 -/
